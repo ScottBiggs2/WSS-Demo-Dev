@@ -1,0 +1,3 @@
+My thoughts: 
+
+This method does not work because the updates to USV^T do not follow the structure required for SVD. This breaks all the geometry and is just a big mess. I'm also suspicious of the perpendicular projections of the gradients, because they might be stifling early learning signal too hardshly. My assessment that this was an MVP was wrong. The more complete diff. geo. framework developed in the complex dir will have a better shot. 

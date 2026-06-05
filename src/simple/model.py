@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from layer import SimpleSubspaceLayer
+from src.simple.layer import SimpleSubspaceLayer
 
 
 class SimpleSubspaceClassifier(nn.Module):
