@@ -88,10 +88,10 @@ def main():
     test_loader  = DataLoader(test_set,  batch_size=512, shuffle=False, num_workers=0)
 
     INPUT_DIM   = 784
-    HIDDEN_DIMS = [256, 128]
+    HIDDEN_DIMS = [128, 64]
     N_CLASSES   = 10
-    EPOCHS      = 5
-    J, R        = 4, 16
+    EPOCHS      = 10
+    J, R        = 4, 8
 
     subspace = SimpleSubspaceClassifier(INPUT_DIM, N_CLASSES, HIDDEN_DIMS, J=J, r=R)
     dense    = DenseClassifier(INPUT_DIM, N_CLASSES, HIDDEN_DIMS)
