@@ -13,7 +13,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-from src.simple.model import SimpleSubspaceClassifier, DenseClassifier
+from model import SimpleSubspaceClassifier, DenseClassifier
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +50,7 @@ def accuracy(model, loader, device):
 def run(name, model, train_loader, test_loader, epochs, device, lr=1e-3):
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
     print(f"\n{'─' * 55}")

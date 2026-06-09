@@ -67,9 +67,14 @@ class SimpleSubspaceLayer(nn.Module):
         U_init = torch.stack([torch.linalg.qr(torch.randn(out_dim, r))[0] for _ in range(J)])
         V_init = torch.stack([torch.linalg.qr(torch.randn(in_dim,  r))[0] for _ in range(J)])
 
+
+        # Modify to the UY^T = USV^T form?
+        #  
         self.U = nn.Parameter(U_init)
         self.S = nn.Parameter(torch.ones(J, r))
         self.V = nn.Parameter(V_init)
+        
+        # self.Y = nn.Parameter(V_init)
 
         if use_biases:
             self.biases = nn.Parameter(torch.zeros(J, out_dim))

@@ -2,3 +2,7 @@ numpy==1.26.4
 torch==2.3.1
 torchvision==0.18.1
 jax[cpu]==0.4.28
+geoopt==0.5.1
+matplotlib==3.10.9
+pytest==9.0.3
+tqdm==4.68.1
