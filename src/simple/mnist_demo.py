@@ -49,6 +49,8 @@ def accuracy(model, loader, device):
 
 def run(name, model, train_loader, test_loader, epochs, device, lr=1e-3):
     model = model.to(device)
+
+    # neither of these work because they break steifel geometry
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # optimizer = torch.optim.SGD(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()

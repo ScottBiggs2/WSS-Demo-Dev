@@ -136,12 +136,14 @@ def main():
 
     # ── summary table ────────────────────────────────────────────────────────────
     print("\n" + "=" * 92)
-    print(f"  {'run':<20} {'params':>9} {'acc':>8} {'ortho_err':>11} {'ENC_L':>7} {'ENC_R':>7} {'it/s':>7}")
+    print(f"  {'run':<20} {'params':>9} {'acc':>8} {'ortho_err':>11} {'ENC_L':>7} {'ENC_R':>7} {'it/s':>7} {'peak_mem_mb':>7}")
     print("-" * 92)
     for r in results:
         print(f"  {r['name']:<20} {r['params']:>9,} {r['final_acc']:>8.3%} "
               f"{r['final_ortho_err']:>11.2e} {r.get('ENC_L', float('nan')):>7.3f} "
-              f"{r.get('ENC_R', float('nan')):>7.3f} {r['steps_per_sec']:>7.1f}")
+              f"{r.get('ENC_R', float('nan')):>7.3f} {r['steps_per_sec']:>7.1f} "
+              f"{r.get('peak_mem_mb', float('nan')):>7.3f} " # I added this, syntax might be off
+              )
     print("=" * 92)
 
     # verdicts (robust to running a subset of runs)
