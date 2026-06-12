@@ -50,7 +50,12 @@ def build_optimizers(model: nn.Module, tcfg: TrainConfig) -> list[torch.optim.Op
             # Remark-8 control: no retraction -- plain Euclidean SGD on the manifold params.
             opts.append(torch.optim.SGD(stiefel, lr=tcfg.lr_riemann))
     if euclid:
-        opts.append(torch.optim.Adam(euclid, lr=tcfg.lr_euclid))
+        # Note: This is not a fair comparison because the geopt Reimannian Adam loses V_t, while dense keeps it.
+        # opts.append(torch.optim.Adam(euclid, lr=tcfg.lr_euclid))
+        # Maybe either SGD with momentum or RMSProp are better bases of comparison? 
+        opts.append(torch.optim.SGD(euclid, lr=tcfg.lr_euclid, momentum = 0.9))
+        # opts.appaned(torch.optim.RMSProp(euclid, lr = tcfg.lr_euclid, momentum = 0.9))
+
     return opts
 
 
