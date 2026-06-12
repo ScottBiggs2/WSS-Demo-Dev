@@ -10,4 +10,6 @@ __pycache__
 data/
 data/*
 
+.DS_Store
+
 src/complex/experiments/outputs
