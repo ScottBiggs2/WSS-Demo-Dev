@@ -115,6 +115,10 @@ class ViTConfig:
     J: int = 4
     r: int = 16
     use_bias: bool = True
+    # Stiefel retraction for all wss projections. True = canonical (Cayley/solve, agent_guide
+    # default); False = euclidean (QR). Both keep U^T U = I; euclidean is markedly faster on M1
+    # (the retraction is the bottleneck) and is a faithful alternative -- see make_proj.
+    stiefel_canonical: bool = True
     gate: GateConfig = field(default_factory=lambda: GateConfig(phi="softmax"))
     lambda_div: float = 1e-3
     # Faithfulness knob: the WSS contract inits the spectrum at sigma0 = sqrt(2*J*m/r) (He fan-in).

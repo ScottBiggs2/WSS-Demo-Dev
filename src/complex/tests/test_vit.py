@@ -92,6 +92,31 @@ def test_diversity_and_diagnostics():
         assert m.diagnostics() == {}
 
 
+@pytest.mark.parametrize("device", available_devices())
+def test_euclidean_retraction_preserves_orthonormality(device):
+    """The euclidean (QR) Stiefel retraction (M1 speed option) must keep U^T U = I, like canonical."""
+    model = ViT(_tiny("wss", stiefel_canonical=False)).to(device)
+    tcfg = TrainConfig(device=str(device), lr_riemann=1e-2, lr_euclid=1e-2, lambda_div=1e-3)
+    opts = build_optimizers(model, tcfg)
+    x = torch.randn(8, 3, 16, 16, device=device)
+    y = torch.randint(0, 10, (8,), device=device)
+    for _ in range(3):
+        for o in opts:
+            o.zero_grad()
+        (torch.nn.functional.cross_entropy(model(x), y) + tcfg.lambda_div * model.diversity_loss()).backward()
+        for o in opts:
+            o.step()
+    assert _orthonormality(model) < 1e-4
+
+
+def test_batched_diversity_matches_per_layer():
+    """summed_diversity (batched eigvalsh, the M1 fast path) must equal the per-layer sum exactly."""
+    model = ViT(_tiny("wss"))
+    wss = [m for _, m in model._named_wss()]
+    per_layer = torch.stack([m.diversity()["D"] for m in wss]).sum()
+    assert torch.allclose(model.diversity_loss(), per_layer, atol=1e-6)
+
+
 def test_wss_mlp_with_dense_attention():
     """attn_type='dense' + layer_type='wss' -> only the 2 MLP layers per block are wss."""
     m = ViT(_tiny("wss", attn_type="dense"))

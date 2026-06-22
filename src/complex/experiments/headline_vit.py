@@ -57,6 +57,7 @@ def build_run(name, layer_type, attn_type, lambda_div, retraction, args, tcfg_ba
         layer_type=layer_type, attn_type=attn_type,
         dim=args.dim, depth=args.depth, heads=args.heads, mlp_ratio=args.mlp_ratio,
         J=args.J, r=args.r, lambda_div=lambda_div, init_scale=args.init_scale,
+        stiefel_canonical=not args.euclidean,
         gate=GateConfig(phi=args.gate_phi),
     )
     model = ViT(cfg)
@@ -90,6 +91,9 @@ def main():
     ap.add_argument("--r", type=int, default=16)
     ap.add_argument("--init_scale", type=float, default=1.0,
                     help="faithful=1.0; <1.0 is an explicit NON-faithful stability probe")
+    ap.add_argument("--euclidean", action="store_true",
+                    help="use euclidean (QR) Stiefel retraction instead of canonical (Cayley/solve)"
+                         " -- both keep U^T U=I; QR is ~2.7x faster on MPS (M1 perf option)")
     ap.add_argument("--gate_phi", default="softmax")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--no_augment", action="store_true", help="disable CIFAR train augmentation")

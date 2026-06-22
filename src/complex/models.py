@@ -58,11 +58,15 @@ class MLP(nn.Module):
         return [l for l in self.layers if isinstance(l, SuperpositionLinear) and l.J > 1]
 
     def diversity_loss(self) -> torch.Tensor:
-        """Sum of D = -(S_L + S_R) over wss layers (J>1). 0 if none (e.g. dense/single_rank)."""
+        """Sum of D = -(S_L + S_R) over wss layers (J>1). 0 if none (e.g. dense/single_rank).
+
+        Uses summed_diversity (batched eigvalsh) -- mathematically identical to summing each
+        layer's diversity()["D"], but one CPU sync instead of one-per-frame (M1 speedup)."""
+        from .diversity import summed_diversity
         wss = self._wss_layers()
         if not wss:
             return torch.zeros((), device=next(self.parameters()).device)
-        return torch.stack([l.diversity()["D"] for l in wss]).sum()
+        return summed_diversity([l.U for l in wss] + [l.V for l in wss])
 
     @torch.no_grad()
     def diagnostics(self) -> dict:

@@ -192,6 +192,25 @@ the first-time download to ~50 KB/s; the tarball is cached after that).
   factors are tiny so this is correct, just slower per step than dense.
 - The MNIST MLP is small enough that `--device cpu` is also fine.
 
+### M1 speedups (all faithful to the math — commented in code)
+
+The retraction and `eigvalsh` CPU-fallbacks dominate WSS step time on M1. Two **math-preserving**
+pickups (profiled on the full ViT, `dim128/depth6`, B128):
+
+1. **Batched diversity** (`diversity.summed_diversity`, on by default): the training-loss path
+   stacks all equally-sized `Jr×Jr` Grams and does **one** batched `eigvalsh` after **one**
+   MPS→CPU sync, instead of one per frame (~72 for a depth-6 ViT). Bit-identical result (the
+   `1/J` Gram scaling cancels in the unit-trace normalization). **MPS 0.80 → 1.03 it/s.**
+2. **Euclidean (QR) Stiefel retraction** (`--euclidean` / `ViTConfig.stiefel_canonical=False`,
+   opt-in): the canonical (Cayley/`solve`) retraction is the single biggest cost; the QR
+   retraction is **~2.7× faster on MPS** and keeps `UᵀU=I` *more* tightly (it's a QR). Both are
+   valid Stiefel retractions — they differ only in the manifold metric/trajectory — so this is
+   faithful to the WSS *idea*. Default stays canonical (the agent_guide choice). **+24% on MPS.**
+
+Combined (`--euclidean`, batched diversity on): **MPS 0.80 → ~1.24 it/s (~1.55×)**, and with these
+on the optimized MPS path edges out pure CPU. None of this changes the WSS mathematics; all
+substitutions are labeled in code so future versions stay faithful.
+
 ## Deferred (clean seams left, not implemented)
 
 Fashion-MNIST sweep, full λ_div/J/gate ablation matrix, interpretability probe,

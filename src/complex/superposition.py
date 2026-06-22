@@ -132,22 +132,28 @@ class SuperpositionLinear(nn.Module):
 
 def make_proj(layer_type: str, in_dim: int, out_dim: int, *, J: int, r: int,
               use_bias: bool = True, gate: GateConfig | None = None,
-              device=None, dtype=None) -> nn.Module:
+              stiefel_canonical: bool = True, device=None, dtype=None) -> nn.Module:
     """Build one projection of the requested family. Shared by models.MLP and the ViT so the
     three baselines (dense / single_rank_Jr / wss) are built from one code path:
 
       * dense          -> nn.Linear
       * single_rank_Jr -> SuperpositionLinear, J=1 at rank J*r, gate forced off (the honest control)
       * wss            -> SuperpositionLinear, J components of rank r, gated
+
+    stiefel_canonical selects the Stiefel retraction (passed to LayerConfig): True = canonical
+    (Cayley/solve, the agent_guide default), False = euclidean (QR). BOTH keep U^T U = I; they
+    differ only in the manifold metric/trajectory. Euclidean (QR) is ~2.7x faster on MPS / ~4.5x
+    on CPU here (the retraction is the M1 bottleneck), so it is a faithful speed option.
     """
     if layer_type == "dense":
         return nn.Linear(in_dim, out_dim, bias=use_bias, device=device, dtype=dtype)
     if layer_type == "single_rank_Jr":
         lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=1, r=J * r, use_bias=use_bias,
-                           gate=GateConfig(phi="linear", disabled=True))
+                           stiefel_canonical=stiefel_canonical, gate=GateConfig(phi="linear", disabled=True))
         return SuperpositionLinear(lcfg, device=device, dtype=dtype)
     if layer_type == "wss":
         lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=J, r=r, use_bias=use_bias,
+                           stiefel_canonical=stiefel_canonical,
                            gate=gate if gate is not None else GateConfig(phi="softmax"))
         return SuperpositionLinear(lcfg, device=device, dtype=dtype)
     raise ValueError(f"unknown layer_type {layer_type!r}")
@@ -171,7 +177,8 @@ class SuperpositionMultiHeadAttn(nn.Module):
     """
 
     def __init__(self, dim: int, heads: int, layer_type: str, *, J: int, r: int,
-                 use_bias: bool = True, gate: GateConfig | None = None, device=None, dtype=None):
+                 use_bias: bool = True, gate: GateConfig | None = None,
+                 stiefel_canonical: bool = True, device=None, dtype=None):
         super().__init__()
         assert dim % heads == 0, f"dim={dim} not divisible by heads={heads}"
         self.dim, self.heads = dim, heads
@@ -180,7 +187,7 @@ class SuperpositionMultiHeadAttn(nn.Module):
 
         def mk(i, o):
             return make_proj(layer_type, i, o, J=J, r=r, use_bias=use_bias, gate=gate,
-                             device=device, dtype=dtype)
+                             stiefel_canonical=stiefel_canonical, device=device, dtype=dtype)
 
         # Separate Q/K/V/O (each its own frames/gate/spectrum when wss) -- user-chosen design.
         self.q_proj, self.k_proj, self.v_proj, self.o_proj = mk(dim, dim), mk(dim, dim), mk(dim, dim), mk(dim, dim)

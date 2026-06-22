@@ -49,8 +49,45 @@ def diversity_penalty(U: torch.Tensor, V: torch.Tensor, J: int, r: int, eps: flo
 
     Total training loss is L_pred + lambda_div * D; minimizing D maximizes entropy (spreads
     the subspaces apart). All values carry gradients (autograd through eigvalsh on CPU).
+
+    This per-layer form is kept for diagnostics/tests (it also yields ENC). The TRAINING loss
+    sums D over many layers via summed_diversity() below, which batches the eigvalsh.
     """
     S_L, ENC_L = von_neumann(U, J, r, eps)
     S_R, ENC_R = von_neumann(V, J, r, eps)
     D = -(S_L + S_R)
     return {"S_L": S_L, "S_R": S_R, "ENC_L": ENC_L, "ENC_R": ENC_R, "D": D}
+
+
+def summed_diversity(frames: list[torch.Tensor], eps: float = 1e-12) -> torch.Tensor:
+    """Scalar D = -(sum of von Neumann entropies over `frames`), for the training loss.
+
+    MATHEMATICALLY IDENTICAL to `-sum_i von_neumann(frame_i)` (the (1/J) Gram scaling cancels in
+    the unit-trace normalization, so the per-frame entropy is unchanged). The only difference is a
+    PERFORMANCE one for M1: instead of one CPU `eigvalsh` + one MPS->CPU `.cpu()` sync per frame
+    (72 of each for a depth-6 ViT), we stack all the equally-sized (Jr x Jr) Grams and do ONE
+    batched `eigvalsh` after ONE sync. Same numbers, far fewer fallback round-trips.
+
+    `frames`: stacked frames (each (J, n_i, r)); n_i may differ but all must share J*r (true by
+    construction -- a model uses one (J, r) for all its wss layers). A defensive per-frame path
+    handles any mixed-size case without changing results.
+    """
+    if not frames:
+        raise ValueError("summed_diversity() needs at least one frame")
+    dev = frames[0].device
+    grams = [gram(stack_frames(U), U.shape[0]) for U in frames]   # each (Jr, Jr); /J cancels below
+    sizes = {g.shape[-1] for g in grams}
+    if len(sizes) == 1:
+        g_stack = torch.stack(grams, dim=0)                       # (N, Jr, Jr)
+        lam = torch.linalg.eigvalsh(g_stack.cpu())                # (N, Jr) -- ONE batched eig, ONE sync
+        p = lam.clamp_min(eps)
+        p = p / p.sum(dim=-1, keepdim=True)                       # per-frame unit trace
+        S = -(p * p.log()).sum(dim=-1).sum()                      # scalar (CPU)
+        return (-S).to(dev)
+    # Mixed Jr (not produced by the current models): fall back to per-frame, same math.
+    total = torch.zeros((), device="cpu")
+    for g in grams:
+        lam = torch.linalg.eigvalsh(g.cpu())
+        p = lam.clamp_min(eps); p = p / p.sum()
+        total = total - (p * p.log()).sum()
+    return (-total).to(dev)
