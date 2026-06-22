@@ -19,32 +19,15 @@ import math
 import torch
 import torch.nn as nn
 
-from .config import GateConfig, LayerConfig, ModelConfig
-from .superposition import SuperpositionLinear
+from .config import ModelConfig
+from .superposition import SuperpositionLinear, make_proj
 
 
 def make_layer(layer_type: str, in_dim: int, out_dim: int, cfg: ModelConfig) -> nn.Module:
-    if layer_type == "dense":
-        return nn.Linear(in_dim, out_dim, bias=cfg.use_bias)
-
-    if layer_type == "single_rank_Jr":
-        # one component (J=1) of rank J*r, gate forced off (f == 1): the honest control.
-        lcfg = LayerConfig(
-            in_dim=in_dim, out_dim=out_dim, J=1, r=cfg.J * cfg.r,
-            use_bias=cfg.use_bias,
-            gate=GateConfig(phi="linear", disabled=True),
-        )
-        return SuperpositionLinear(lcfg)
-
-    if layer_type == "wss":
-        lcfg = LayerConfig(
-            in_dim=in_dim, out_dim=out_dim, J=cfg.J, r=cfg.r,
-            use_bias=cfg.use_bias,
-            gate=cfg.gate,
-        )
-        return SuperpositionLinear(lcfg)
-
-    raise ValueError(f"unknown layer_type {layer_type!r}")
+    """Thin adapter from a ModelConfig to the shared make_proj factory (superposition.py).
+    Behavior-preserving: dense -> nn.Linear, single_rank_Jr -> rank-J*r ungated, wss -> gated."""
+    return make_proj(layer_type, in_dim, out_dim, J=cfg.J, r=cfg.r,
+                     use_bias=cfg.use_bias, gate=cfg.gate)
 
 
 class MLP(nn.Module):
@@ -113,3 +96,5 @@ def _min_principal_angle(U: torch.Tensor) -> float:
             max_cos = max(max_cos, s.max().item())
     max_cos = min(max_cos, 1.0)
     return math.acos(max_cos)
+
+

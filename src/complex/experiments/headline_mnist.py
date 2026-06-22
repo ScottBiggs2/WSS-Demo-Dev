@@ -37,8 +37,11 @@ import torch
 from complex.config import GateConfig, ModelConfig, TrainConfig
 from complex.data import get_loaders
 from complex.device import get_device
+from complex.memory import measure_breakdown
 from complex.models import MLP
 from complex.train import fit
+
+_MEM_KEYS = ("mem_weight_mb", "mem_activation_mb", "mem_grad_mb", "mem_optim_mb")
 
 OUT_DIR = Path(__file__).resolve().parent / "outputs"
 
@@ -92,10 +95,11 @@ def main():
     torch.manual_seed(0)
     device = get_device(args.device)
     dims = [784, 256, 128, 10]
-    print(f"device={device} | dims={dims} | J={args.J} r={args.r} "
+    print(f"device={device} | dataset={args.dataset} | dims={dims} | J={args.J} r={args.r} "
           f"lambda_div={args.lambda_div} epochs={args.epochs} gate={args.gate_phi}")
 
     train_loader, test_loader = get_loaders(args.dataset, args.batch_size)
+    mem_batch = next(iter(train_loader))   # one representative batch for the memory breakdown
 
     tcfg_base = dict(
         epochs=args.epochs, batch_size=args.batch_size,
@@ -124,6 +128,7 @@ def main():
         enc = final_enc(hist)
         row = {
             "name": name,
+            "dataset": args.dataset,
             "params": n_params,
             "final_acc": hist["final_acc"],
             "final_ortho_err": hist["ortho_err"][-1],
@@ -131,6 +136,14 @@ def main():
             "peak_mem_mb": hist.get("peak_mem_mb", float("nan")),
             **enc,
         }
+        # memory breakdown (once per run, after training -- never in the hot loop)
+        try:
+            mem = measure_breakdown(model, tcfg, mem_batch, device=device)
+            row.update({k: mem[k] for k in _MEM_KEYS})
+            row["mem_activation_analytic_mb"] = mem["mem_activation_analytic_mb"]
+        except Exception as e:  # best-effort tooling; never kill the run
+            print(f"  [memory] breakdown failed: {e}")
+            row.update({k: float("nan") for k in _MEM_KEYS})
         results.append(row)
         histories[name] = hist
 
@@ -164,9 +177,20 @@ def main():
               f"acc {acc['wss']:.3%}/{acc['wss_no_retraction']:.3%}  "
               f"ortho {ortho['wss']:.1e}/{ortho['wss_no_retraction']:.1e}")
 
+    # ── memory breakdown table (MB) ───────────────────────────────────────────────
+    print("\n  Memory utilization (MB)")
+    print(f"  {'run':<20} {'weight':>9} {'activation':>11} {'gradient':>9} {'optimizer':>10} {'total':>9}")
+    print("-" * 72)
+    for r in results:
+        w = r.get("mem_weight_mb", float("nan")); a = r.get("mem_activation_mb", float("nan"))
+        g = r.get("mem_grad_mb", float("nan")); o = r.get("mem_optim_mb", float("nan"))
+        tot = sum(v for v in (w, a, g, o) if v == v)  # nan-safe
+        print(f"  {r['name']:<20} {w:>9.3f} {a:>11.3f} {g:>9.3f} {o:>10.3f} {tot:>9.3f}")
+    print("  (activation = empirical live-alloc delta on MPS/CUDA; analytic estimate in CSV)")
+
     # ── persist CSV + JSON + plot ─────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    tag = "quick" if args.quick else f"e{args.epochs}_J{args.J}_r{args.r}"
+    tag = f"{args.dataset}_quick" if args.quick else f"{args.dataset}_e{args.epochs}_J{args.J}_r{args.r}"
     fieldnames = list(dict.fromkeys(k for row in results for k in row))  # union, ordered
     with open(OUT_DIR / f"summary_{tag}.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
@@ -175,16 +199,16 @@ def main():
     with open(OUT_DIR / f"histories_{tag}.json", "w") as f:
         json.dump({k: {kk: vv for kk, vv in v.items() if kk != "diagnostics"}
                    for k, v in histories.items()}, f, indent=2)
-    _plot(histories, OUT_DIR / f"report_{tag}.png", args)
+    _plot(histories, results, OUT_DIR / f"report_{tag}.png", args)
     print(f"\nWrote outputs to {OUT_DIR}/ (summary_{tag}.csv, report_{tag}.png)")
 
 
-def _plot(histories, path, args):
+def _plot(histories, results, path, args):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
+    fig, axes = plt.subplots(1, 4, figsize=(21, 4.5))
     for name, h in histories.items():
         axes[0].plot(h["epoch"], h["test_acc"], marker="o", label=name)
     axes[0].set(title="Test accuracy", xlabel="epoch", ylabel="acc")
@@ -204,7 +228,21 @@ def _plot(histories, path, args):
     axes[2].set(title="Orthonormality error", xlabel="epoch", ylabel="||UᵀU-I||∞", yscale="log")
     axes[2].legend(fontsize=8); axes[2].grid(alpha=0.3)
 
-    fig.tight_layout()
+    # Panel 3: stacked memory breakdown per run (weight / activation / gradient / optimizer).
+    names = [r["name"] for r in results]
+    cats = [("mem_weight_mb", "weight"), ("mem_activation_mb", "activation"),
+            ("mem_grad_mb", "gradient"), ("mem_optim_mb", "optimizer")]
+    bottom = [0.0] * len(names)
+    for key, label in cats:
+        vals = [r.get(key, 0.0) if r.get(key, 0.0) == r.get(key, 0.0) else 0.0 for r in results]
+        axes[3].bar(names, vals, bottom=bottom, label=label)
+        bottom = [b + v for b, v in zip(bottom, vals)]
+    axes[3].set(title="Memory breakdown (MB)", ylabel="MB")
+    axes[3].tick_params(axis="x", rotation=45, labelsize=7)
+    axes[3].legend(fontsize=8); axes[3].grid(alpha=0.3, axis="y")
+
+    fig.suptitle(f"{args.dataset} | J={args.J} r={args.r} epochs={args.epochs} gate={args.gate_phi}", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(path, dpi=120)
 
 

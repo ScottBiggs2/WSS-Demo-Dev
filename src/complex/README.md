@@ -108,6 +108,83 @@ Phase-2 (25 epochs, RiemannianAdam lr=1e-3; readout dense for all):
 Reproduce: `python src/complex/experiments/headline_mnist.py --epochs 25 --runs dense,single_rank_Jr,wss`
 (add `wss_div0,wss_no_retraction` to the `--runs` list for the diversity / Remark-8 controls).
 
+## Phase 2.5 tooling (scaling + interpretability)
+
+Three additions, all isolated to `memory.py` + the experiment scripts (the numerics core is
+untouched):
+
+**Memory breakdown** ([memory.py](memory.py)) — separates **weight / gradient / optimizer /
+activation** memory. Weight/grad/optimizer are exact (shapes + `opt.state`; both RiemannianAdam
+and Adam keep `exp_avg`+`exp_avg_sq`, so optimizer ≈ 2× weights). Activation is empirical
+(`current_allocated_memory()` delta around the forward — MPS has no peak counter) cross-checked
+against an analytic per-layer model `∝ B`. Surfaced in `headline_mnist.py` as CSV columns
+(`mem_*`), a printed table, and a 4th stacked-bar plot panel. The scaling signal: at matched
+params, **wss carries the largest activation footprint** (`J·B·(2r+m)` intermediates) while its
+weight/grad/optimizer match `single_rank_Jr` — a parameter-vs-activation tradeoff to weigh when
+scaling.
+
+**Fashion-MNIST** — `--dataset fmnist` (the harder task). Outputs are dataset-tagged
+(`summary_fmnist_*`, `report_fmnist_*`) so they don't collide with MNIST.
+
+**Subspace interpretability** ([experiments/subspace_interp.py](experiments/subspace_interp.py))
+— trains a low-rank wss MLP and visualizes per-component gate weights as an aggregate heatmap
+(rows = `(layer, subspace)`, columns = class, color = mean gate weight − uniform; a per-class
+accuracy strip on top). Gate weights are extracted by a **read-only forward hook** that recomputes
+`compute_gate` on the captured layer input (no core edit; asserted: hooked logits == clean logits).
+
+```
+python src/complex/experiments/subspace_interp.py --J 10 --r 2 --epochs 8   # one-hot hypothesis
+python src/complex/experiments/subspace_interp.py --J 7  --r 2 --epochs 8   # 7-segment hypothesis
+```
+
+*Finding (MNIST, r=2, softmax gate):* the gate does **not** specialize per class. The selectivity
+metric — effective #subspaces per class, `exp(entropy)` of the per-class gate distribution — comes
+out at **10.00/10 (J=10)** and **7.00/7 (J=7)**, i.e. essentially uniform. The deviation heatmap
+shows only faint structure (a few mildly "preferred" generalist subspaces, no diagonal/combinatorial
+code), despite ~93% accuracy. So neither the one-hot (J=10) nor 7-segment (J=7) hypothesis holds
+under the energy-softmax gate at low rank — the accuracy comes from the frames/spectrum, not gate
+selection. (The probe takes `--gate_phi` to retry with sharper gates as follow-up.)
+
+## Phase 3 — WSS ViT on CIFAR-10
+
+A tiny pre-norm Vision Transformer ([vit.py](vit.py)) whose **attention Q/K/V/O and MLP fc1/fc2
+are WSS layers** (patch-embed Conv2d and the classification head stay dense). One `layer_type`
+(dense / single_rank_Jr / wss) drives every factorized projection — the same matched three-way
+comparison as the MNIST MLP — and an independent **`attn_type`** selector swaps the attention
+implementation:
+
+- `wss_separate` — separate WSS Q/K/V/O (each its own Stiefel frames + gate + spectrum). Built now.
+- `dense` — conventional MHA (nn.Linear Q/K/V/O), e.g. to pair a WSS MLP with dense attention.
+- `wss_fused`, `wss_folded` — **reserved seams** (fused-QKV; the gate-folded "idea 1" attention),
+  left as commented stubs in [superposition.py](superposition.py) for future experiments.
+
+Default config (`dim=128, depth=6, heads=4, mlp_ratio=2, J=4, r=16`) — every model **<1M params**:
+
+| model | attn_type | params |
+|---|---|---|
+| dense ViT (baseline) | dense | 811,146 |
+| single_rank_Jr ViT | wss_separate | 715,146 |
+| **wss ViT** | wss_separate | 715,146 (matched to single_rank) |
+
+```bash
+PYTORCH_ENABLE_MPS_FALLBACK=1 python src/complex/experiments/headline_vit.py --epochs 20
+python src/complex/experiments/headline_vit.py --quick          # fast 2-epoch sanity
+```
+
+**Faithfulness note:** this build keeps the WSS contract's init `σ₀=sqrt(2Jm/r)` (`init_scale=1.0`)
+and per-step diversity — it is **not** tuned for M1 speed. The `(...,n)` generalization of
+`SuperpositionLinear.forward` (flatten leading dims) is a *mathematically-identical* per-token
+application, labeled as such in the code; the gate therefore fires **per patch token**. Attention
+uses manual `softmax(QKᵀ/√d_h)V` (the explicit definition, not fused SDPA). `init_scale<1` is an
+explicitly non-faithful stability probe, not a default.
+
+**Status:** all 52 tests green (incl. 25 ViT gates). Pipeline verified end-to-end on real CIFAR-10
+via a 2-epoch smoke (`dim64/depth2`): dense/single_rank_Jr/wss all train, orthonormality holds
+(~2e-6), ENC stays diverse (~3.3/4), and the memory panel (log-scale grouped bars) shows activation
+(the J token-stream intermediates) dominating weight/grad/optimizer by ~100-300×. A full headline
+accuracy comparison at the default config is left to a longer run (the toronto CIFAR mirror throttles
+the first-time download to ~50 KB/s; the tarball is cached after that).
+
 ## MPS notes (M1)
 
 - Forward/backward (einsum/bmm) run on MPS. The Stiefel **retraction** (`solve`/`qr`) and the

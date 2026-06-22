@@ -79,6 +79,72 @@ class ModelConfig:
         assert len(self.dims) >= 2, "need at least input and output dims"
         self.gate.validate()
 
+# Attention implementations the ViT can select between. Only the first two are built now;
+# the others are reserved seams (see SuperpositionMultiHeadAttn) for future experiments.
+ATTN_KINDS = (
+    "wss_separate",   # separate WSS Q/K/V/O projections (idea 2; built now)
+    "dense",          # conventional MHA with nn.Linear Q/K/V/O (for WSS-MLP + dense-attn checks)
+    # "wss_fused",    # FUTURE: one fused WSS qkv (dim->3*dim), shared frames/gate across Q,K,V
+    # "wss_folded",   # FUTURE: "idea 1" -- gate folded into the attention score (no materialized W_Q)
+)
+
+
+@dataclass
+class ViTConfig:
+    """Tiny pre-norm ViT whose projections can be dense / single_rank_Jr / wss.
+
+    The patch-embed Conv2d and the classification head are ALWAYS dense (head out_dim=num_classes
+    < J*r would violate the Stiefel r<=out_dim rule -- the same reason the MLP readout stays dense).
+    Factorized linears: attention Q/K/V/O and the MLP fc1 (dim->hidden) / fc2 (hidden->dim).
+
+    `layer_type` selects the factorization family for every WSS projection (attention + MLP).
+    `attn_type` selects the attention *module* independently, so e.g. a WSS MLP can be paired with
+    a conventional dense attention block (attn_type="dense").
+    """
+
+    layer_type: str = "wss"                 # {"dense","single_rank_Jr","wss"} -- all WSS projections
+    attn_type: str = "wss_separate"         # one of ATTN_KINDS
+    img_size: int = 32
+    patch_size: int = 4
+    in_chans: int = 3
+    num_classes: int = 10
+    dim: int = 128
+    depth: int = 6
+    heads: int = 4
+    mlp_ratio: int = 2
+    J: int = 4
+    r: int = 16
+    use_bias: bool = True
+    gate: GateConfig = field(default_factory=lambda: GateConfig(phi="softmax"))
+    lambda_div: float = 1e-3
+    # Faithfulness knob: the WSS contract inits the spectrum at sigma0 = sqrt(2*J*m/r) (He fan-in).
+    # init_scale multiplies sigma0; KEEP 1.0 for a faithful build. Any value != 1.0 is an
+    # explicitly NON-FAITHFUL stabilization for residual-stream/attention-logit hotness -- a
+    # finding to report, not a silent default.
+    init_scale: float = 1.0
+
+    @property
+    def hidden_dim(self) -> int:
+        return self.mlp_ratio * self.dim
+
+    @property
+    def n_patches(self) -> int:
+        return (self.img_size // self.patch_size) ** 2
+
+    @property
+    def seq_len(self) -> int:
+        return self.n_patches + 1            # + cls token
+
+    def validate(self) -> None:
+        assert self.layer_type in ("dense", "single_rank_Jr", "wss"), self.layer_type
+        assert self.attn_type in ATTN_KINDS, f"bad attn_type {self.attn_type!r}, expected {ATTN_KINDS}"
+        assert self.img_size % self.patch_size == 0, "img_size must be divisible by patch_size"
+        assert self.dim % self.heads == 0, f"dim={self.dim} not divisible by heads={self.heads}"
+        assert self.J >= 1 and self.r >= 1, "J, r must be >= 1"
+        # single_rank_Jr factorizes the dim->dim projections at rank J*r -> Stiefel needs J*r <= dim.
+        assert self.J * self.r <= self.dim, (
+            f"J*r={self.J * self.r} must be <= dim={self.dim} (Stiefel r<=out_dim on dim->dim proj)")
+        self.gate.validate()
 
 @dataclass
 class TrainConfig:
