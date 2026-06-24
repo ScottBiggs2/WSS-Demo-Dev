@@ -81,7 +81,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--epochs", type=int, default=20)
     ap.add_argument("--batch_size", type=int, default=128)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr_euclid", type=float, default=1e-3)
+    ap.add_argument("--lr_riemann", type=float, default=1e-3)
     ap.add_argument("--lambda_div", type=float, default=1e-3)
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--depth", type=int, default=6)
@@ -116,8 +117,9 @@ def main():
     mem_batch = next(iter(train_loader))   # representative batch for the memory breakdown
 
     tcfg_base = dict(epochs=args.epochs, batch_size=args.batch_size,
-                     lr_riemann=args.lr, lr_euclid=args.lr,
+                     lr_riemann=args.lr_riemann, lr_euclid=args.lr_euclid,
                      dataset=dataset, device=args.device, stabilize=50)
+    # reproj to stiefel every 50 (or stabilize) optimizer steps
 
     # (layer_type, attn_type, lambda_div, retraction)
     all_runs = {

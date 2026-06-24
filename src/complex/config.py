@@ -46,7 +46,11 @@ class LayerConfig:
     r: int
     use_bias: bool = True
     stiefel_canonical: bool = True   # canonical (Cayley/solve) vs euclidean (QR) retraction
-    gate: GateConfig = field(default_factory=GateConfig)
+
+    # A swap for consistency and checking impacts on interp demo
+    # gate: GateConfig = field(default_factory=GateConfig)
+    gate: GateConfig = field(default_factory=lambda: GateConfig(phi="softmax"))
+
 
     def validate(self) -> None:
         assert self.J >= 1, "J must be >= 1"
@@ -71,7 +75,7 @@ class ModelConfig:
     J: int = 4
     r: int = 16
     use_bias: bool = True
-    gate: GateConfig = field(default_factory=GateConfig)
+    gate: GateConfig = field(default_factory=GateConfig)       # Linear gating! This is a bug!
     lambda_div: float = 1e-2                                   # diversity penalty weight
 
     def validate(self) -> None:

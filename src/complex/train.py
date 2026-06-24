@@ -45,6 +45,7 @@ def build_optimizers(model: nn.Module, tcfg: TrainConfig) -> list[torch.optim.Op
     opts: list[torch.optim.Optimizer] = []
     if stiefel:
         if tcfg.retraction:
+            # Need to consider if weight decay is helpful here, it probably is
             opts.append(geoopt.optim.RiemannianAdam(stiefel, lr=tcfg.lr_riemann, stabilize=tcfg.stabilize))
         else:
             # Remark-8 control: no retraction -- plain Euclidean SGD on the manifold params.

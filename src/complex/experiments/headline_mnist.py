@@ -80,7 +80,8 @@ def main():
     ap.add_argument("--J", type=int, default=4)
     ap.add_argument("--r", type=int, default=32)
     ap.add_argument("--lambda_div", type=float, default=1e-3)
-    ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--lr_euclid", type=float, default=1e-3)
+    ap.add_argument("--lr_riemann", type=float, default=1e-3)
     ap.add_argument("--dataset", default="mnist")
     ap.add_argument("--device", default="auto")
     ap.add_argument("--gate_phi", default="softmax")
@@ -103,7 +104,7 @@ def main():
 
     tcfg_base = dict(
         epochs=args.epochs, batch_size=args.batch_size,
-        lr_riemann=args.lr, lr_euclid=args.lr,
+        lr_riemann=args.lr_riemann, lr_euclid=args.lr_euclid,
         dataset=args.dataset, device=args.device, stabilize=50,
     )
 
