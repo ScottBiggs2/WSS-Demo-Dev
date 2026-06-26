@@ -9,16 +9,14 @@
 #SBATCH --output=slurm/logs/prof_%A_%a.out
 #SBATCH --error=slurm/logs/prof_%A_%a.err
 #SBATCH --array=0-19
-#SBATCH --gres=gpu:a100:1               # one GPU per task. Some clusters use: --gpus=1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --time=06:00:00            # ceiling; profiling itself takes minutes
-
-# ----- USER: set for your cluster -----------------------------------------------------------
-## SBATCH --partition=CHANGE_ME
-## Optionally pin the GPU type (A100 / H200), e.g.:
-## SBATCH --constraint=a100
-# --------------------------------------------------------------------------------------------
+#SBATCH --gres=gpu:a100:1               # one GPU per task
+#SBATCH --time=06:00:00                 # ceiling; profiling itself takes minutes
+#SBATCH --partition=gpu                 # the A100 partition. REQUIRED -- omitting it lands you on
+                                        # the default partition (no A100) -> "node config not available"
 
 set -euo pipefail
 

@@ -15,16 +15,13 @@
 #SBATCH --output=slurm/logs/conv_%A_%a.out
 #SBATCH --error=slurm/logs/conv_%A_%a.err
 #SBATCH --array=0,1,2,4,6,7,10,11,12,14,16,17
-#SBATCH --gres=gpu:a100:1
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
+#SBATCH --gres=gpu:a100:1
 #SBATCH --time=06:00:00
-
-# ----- USER: set for your cluster -----------------------------------------------------------
-## SBATCH --account=CHANGE_ME
-## SBATCH --partition=CHANGE_ME
-## SBATCH --constraint=a100
-# --------------------------------------------------------------------------------------------
+#SBATCH --partition=gpu                 # the A100 partition. REQUIRED (see profile.sbatch note)
 
 set -euo pipefail
 

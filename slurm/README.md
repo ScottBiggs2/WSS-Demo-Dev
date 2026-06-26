@@ -32,19 +32,25 @@ Within each tier, wss spans the retraction sweep: canonical / qr / newton_schulz
 `retract_every` 2,4. The `100k` tier uses r=4 (so WSS is genuinely ~half of dense); the `1m` tier
 keeps r=16 for continuity with prior runs.
 
-## Before submitting — edit these in BOTH `.sbatch` files
+## Cluster settings (pre-filled for this cluster)
+
+Both `.sbatch` files are set up for the current cluster: `--partition=gpu`, `--gres=gpu:a100:1`,
+`--nodes=1 --ntasks-per-node=1`, `REPO=/home/biggs.s/WSS-Demo-Dev`,
+`WSS_ENV=/scratch/biggs.s/conda_envs/wss`. `--partition` is **required** — omitting it lands you on
+the default partition (no A100) and `sbatch` fails with *"Requested node configuration is not available."*
+
+A teammate on a different cluster edits, in BOTH files:
 
 | Directive / var        | Set to                                                        |
 |------------------------|---------------------------------------------------------------|
-| `#SBATCH --account`    | your allocation/account                                       |
-| `#SBATCH --partition`  | the A100/H200 partition                                       |
-| `#SBATCH --gres=gpu:1` | site GPU syntax (some clusters use `--gpus=1`)                 |
-| `#SBATCH --constraint` | (optional) pin GPU type, e.g. `a100` / `h200`                 |
-| `WSS_REPO`             | repo path on the cluster (or `export WSS_REPO=...`)           |
-| `WSS_ENV`              | conda/mamba env name (or `export WSS_ENV=...`)                |
+| `#SBATCH --partition`  | your A100/H200 partition                                      |
+| `#SBATCH --gres`       | site GPU syntax (some clusters use `--gpus=1`)                |
+| `#SBATCH --account`    | your allocation/account, if your site requires one           |
+| `WSS_REPO`             | repo path on the cluster (or `export WSS_REPO=...`)          |
+| `WSS_ENV`              | conda env prefix path / name (or `export WSS_ENV=...`)       |
 
-The env is activated via `conda`; adjust the `module load` lines if your site names modules
-differently. `PYTORCH_ENABLE_MPS_FALLBACK=1` is exported but is a no-op on CUDA.
+The env is activated via `conda activate "$WSS_ENV"` (a prefix path works); adjust the `module load`
+lines if your site names modules differently. `PYTORCH_ENABLE_MPS_FALLBACK=1` is a no-op on CUDA.
 
 ## Run
 
