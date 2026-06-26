@@ -21,6 +21,7 @@ import time
 import geoopt
 import torch
 import torch.nn as nn
+from tqdm.auto import tqdm
 
 from .config import TrainConfig
 from .manifold import orthonormality_error
@@ -74,13 +75,17 @@ def _peak_memory(device: torch.device) -> float:
     return float("nan")
 
 
-def train_epoch(model, loader, opts, lambda_div, device, criterion) -> dict:
+def train_epoch(model, loader, opts, lambda_div, device, criterion, *, epoch: int | None = None, total_epochs: int | None = None, progress: bool = True) -> dict:
     model.train()
     total_loss = total_div = 0.0
     n_seen = 0
     t0 = time.perf_counter()
     n_batches = 0
-    for x, y in loader:
+    iterator = loader
+    if progress:
+        desc = f"epoch {epoch}/{total_epochs}" if epoch is not None and total_epochs is not None else "train"
+        iterator = tqdm(loader, desc=desc, leave=False, dynamic_ncols=True)
+    for x, y in iterator:
         x, y = x.to(device), y.to(device)
         for o in opts:
             o.zero_grad()
@@ -96,6 +101,8 @@ def train_epoch(model, loader, opts, lambda_div, device, criterion) -> dict:
         total_div += float(div) * bs
         n_seen += bs
         n_batches += 1
+        if progress:
+            iterator.set_postfix(loss=total_loss / n_seen, div=total_div / n_seen)
     dt = time.perf_counter() - t0
     return {
         "train_loss": total_loss / n_seen,

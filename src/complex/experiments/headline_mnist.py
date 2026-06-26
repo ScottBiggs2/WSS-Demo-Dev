@@ -39,6 +39,7 @@ from complex.data import get_loaders
 from complex.device import get_device
 from complex.memory import measure_breakdown
 from complex.models import MLP
+from complex.seed import seed_everything
 from complex.train import fit
 
 _MEM_KEYS = ("mem_weight_mb", "mem_activation_mb", "mem_grad_mb", "mem_optim_mb")
@@ -86,26 +87,24 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--gate_phi", default="softmax")
     ap.add_argument("--runs", default="all",
-                    help="comma-separated subset of {dense,single_rank_Jr,wss,wss_div0,wss_no_retraction} or 'all'")
+                    help="comma-separated subset of {dense,single_rank_Jr,wss,wss_div0,wss_no_retraction,wss_trung,wss_trung_div0,wss_trung_1,wss_trung_2,wss_trung_3} or 'all'")
     ap.add_argument("--quick", action="store_true", help="2 epochs, smaller, for a fast sanity check")
+    ap.add_argument("--seed", type=int, default=3, help="shared seed reset before every run")
     args = ap.parse_args()
 
     if args.quick:
         args.epochs = 2
 
-    torch.manual_seed(0)
+    seed_everything(args.seed)
     device = get_device(args.device)
     dims = [784, 256, 128, 10]
     print(f"device={device} | dataset={args.dataset} | dims={dims} | J={args.J} r={args.r} "
-          f"lambda_div={args.lambda_div} epochs={args.epochs} gate={args.gate_phi}")
-
-    train_loader, test_loader = get_loaders(args.dataset, args.batch_size)
-    mem_batch = next(iter(train_loader))   # one representative batch for the memory breakdown
+          f"lambda_div={args.lambda_div} epochs={args.epochs} gate={args.gate_phi} seed={args.seed}")
 
     tcfg_base = dict(
         epochs=args.epochs, batch_size=args.batch_size,
         lr_riemann=args.lr_riemann, lr_euclid=args.lr_euclid,
-        dataset=args.dataset, device=args.device, stabilize=50,
+        dataset=args.dataset, device=args.device, stabilize=50, seed=args.seed,
     )
 
     all_runs = {
@@ -114,15 +113,22 @@ def main():
         "wss": ("wss", args.lambda_div, True),
         "wss_div0": ("wss", 0.0, True),
         "wss_no_retraction": ("wss", args.lambda_div, False),
+        "wss_trung": ("wss_trung", args.lambda_div, True),
+        "wss_trung_div0": ("wss_trung", 0.0, True),
+        "wss_trung_1": ("wss_trung_1", args.lambda_div, True),
+        "wss_trung_2": ("wss_trung_2", args.lambda_div, True),
+        "wss_trung_3": ("wss_trung_3", args.lambda_div, True),
     }
     selected = list(all_runs) if args.runs == "all" else [s.strip() for s in args.runs.split(",")]
-    runs = [build_run(name, *all_runs[name][:1], dims, args.J, args.r,
-                      all_runs[name][1], all_runs[name][2], args.gate_phi, tcfg_base)
-            for name in selected]
 
     results = []
     histories = {}
-    for name, model, tcfg in runs:
+    for run_name in selected:
+        seed_everything(args.seed)
+        train_loader, test_loader = get_loaders(args.dataset, args.batch_size, seed=args.seed)
+        name, model, tcfg = build_run(run_name, *all_runs[run_name][:1], dims, args.J, args.r,
+                                      all_runs[run_name][1], all_runs[run_name][2],
+                                      args.gate_phi, tcfg_base)
         n_params = count_params(model)
         print(f"\n=== {name}  ({n_params:,} params) ===")
         hist = fit(model, train_loader, test_loader, tcfg, device=device)
@@ -139,6 +145,9 @@ def main():
         }
         # memory breakdown (once per run, after training -- never in the hot loop)
         try:
+            seed_everything(args.seed)
+            mem_loader, _ = get_loaders(args.dataset, args.batch_size, seed=args.seed)
+            mem_batch = next(iter(mem_loader))
             mem = measure_breakdown(model, tcfg, mem_batch, device=device)
             row.update({k: mem[k] for k in _MEM_KEYS})
             row["mem_activation_analytic_mb"] = mem["mem_activation_analytic_mb"]
@@ -177,6 +186,11 @@ def main():
         print(f"  Remark-8 (retraction on/off): "
               f"acc {acc['wss']:.3%}/{acc['wss_no_retraction']:.3%}  "
               f"ortho {ortho['wss']:.1e}/{ortho['wss_no_retraction']:.1e}")
+    if "wss_trung" in acc and "single_rank_Jr" in acc:
+        print(f"  wss_trung vs single_rank_Jr:  {acc['wss_trung'] - acc['single_rank_Jr']:+.3%} "
+              f"(two-factor Euclidean variant)")
+    if enc.get("wss_trung") is not None and enc.get("wss_trung_div0") is not None:
+        print(f"  wss_trung ENC_L div/on-off:   {enc['wss_trung']:.3f} / {enc['wss_trung_div0']:.3f}")
 
     # ── memory breakdown table (MB) ───────────────────────────────────────────────
     print("\n  Memory utilization (MB)")
@@ -225,7 +239,8 @@ def _plot(histories, results, path, args):
     axes[1].legend(fontsize=8); axes[1].grid(alpha=0.3)
 
     for name, h in histories.items():
-        axes[2].plot(h["epoch"], h["ortho_err"], marker="o", label=name)
+        ortho = [max(v, 1e-12) for v in h["ortho_err"]]
+        axes[2].plot(h["epoch"], ortho, marker="o", label=name)
     axes[2].set(title="Orthonormality error", xlabel="epoch", ylabel="||UᵀU-I||∞", yscale="log")
     axes[2].legend(fontsize=8); axes[2].grid(alpha=0.3)
 

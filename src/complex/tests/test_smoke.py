@@ -15,7 +15,7 @@ from conftest import available_devices
 
 
 @pytest.mark.parametrize("device", available_devices())
-@pytest.mark.parametrize("layer_type", ["dense", "single_rank_Jr", "wss"])
+@pytest.mark.parametrize("layer_type", ["dense", "single_rank_Jr", "wss", "wss_trung"])
 def test_smoke_train_reduces_loss(device, layer_type):
     torch.manual_seed(0)
     cfg = ModelConfig(layer_type=layer_type, dims=[64, 48, 10], J=4, r=8,
@@ -26,7 +26,7 @@ def test_smoke_train_reduces_loss(device, layer_type):
     tcfg = TrainConfig(lr_riemann=5e-2, lr_euclid=5e-2, lambda_div=cfg.lambda_div, device=device)
     losses = smoke_train_step(model, X, y, tcfg, n_steps=30, device=torch.device(device))
     assert losses[-1] < losses[0], f"{layer_type}/{device}: loss did not drop ({losses[0]:.3f}->{losses[-1]:.3f})"
-    # orthonormality preserved post-training for the factorized types
-    if layer_type != "dense":
+    # orthonormality is only an invariant for manifold-backed factorized types
+    if layer_type in ("single_rank_Jr", "wss"):
         err = _orthonormality(model)
         assert err < 1e-4, f"{layer_type}/{device}: orthonormality {err:.2e} after smoke train"

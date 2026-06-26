@@ -1,8 +1,9 @@
-"""MLP with three interchangeable layer types (agent_guide §4.1).
+"""MLP with interchangeable layer types (agent_guide §4.1).
 
   * dense           -- plain nn.Linear (baseline).
   * single_rank_Jr  -- one rank-(J*r) factorization U S V^T, ungated (the J=1 control).
   * wss             -- SuperpositionLinear: J components of rank r, gated + diversity.
+  * wss_trung*      -- two-factor Euclidean WSS variants with gated L/R components.
 
 Design note: the readout layer (-> num_classes, e.g. 10) cannot carry rank Jr since rank
 <= out_dim. We therefore keep the readout DENSE for ALL three model types and factorize
@@ -20,7 +21,7 @@ import torch
 import torch.nn as nn
 
 from .config import ModelConfig
-from .superposition import SuperpositionLinear, make_proj
+from .superposition import SuperpositionLinear, WssTrungLinear, make_proj
 
 
 def make_layer(layer_type: str, in_dim: int, out_dim: int, cfg: ModelConfig) -> nn.Module:
@@ -55,7 +56,7 @@ class MLP(nn.Module):
 
     # ── superposition-specific helpers ──────────────────────────────────────────
     def _wss_layers(self):
-        return [l for l in self.layers if isinstance(l, SuperpositionLinear) and l.J > 1]
+        return [l for l in self.layers if isinstance(l, (SuperpositionLinear, WssTrungLinear)) and l.J > 1]
 
     def diversity_loss(self) -> torch.Tensor:
         """Sum of D = -(S_L + S_R) over wss layers (J>1). 0 if none (e.g. dense/single_rank).
@@ -66,20 +67,23 @@ class MLP(nn.Module):
         wss = self._wss_layers()
         if not wss:
             return torch.zeros((), device=next(self.parameters()).device)
-        return summed_diversity([l.U for l in wss] + [l.V for l in wss])
+        if all(isinstance(l, SuperpositionLinear) for l in wss):
+            return summed_diversity([l.U for l in wss] + [l.V for l in wss])
+        return torch.stack([l.diversity()["D"] for l in wss]).sum()
 
     @torch.no_grad()
     def diagnostics(self) -> dict:
         """Per-wss-layer ENC_L/ENC_R and min principal angle between components (radians)."""
         out = {}
         for idx, l in enumerate(self.layers):
-            if not isinstance(l, SuperpositionLinear) or l.J <= 1:
+            if not isinstance(l, (SuperpositionLinear, WssTrungLinear)) or l.J <= 1:
                 continue
             d = l.diversity()
+            U = l.U.detach() if isinstance(l, SuperpositionLinear) else l.diversity_frames()[0].detach()
             out[f"layer{idx}"] = {
                 "ENC_L": d["ENC_L"].item(),
                 "ENC_R": d["ENC_R"].item(),
-                "min_principal_angle": _min_principal_angle(l.U.detach()),
+                "min_principal_angle": _min_principal_angle(U),
             }
         return out
 
@@ -91,12 +95,18 @@ def _min_principal_angle(U: torch.Tensor) -> float:
     of U_j^T U_k. The smallest angle (most-aligned pair) is arccos of the largest such value.
     """
     J = U.shape[0]
-    if J < 2:
+    if J < 2 or not torch.isfinite(U).all():
         return float("nan")
     max_cos = 0.0
     for j in range(J):
         for k in range(j + 1, J):
-            s = torch.linalg.svdvals((U[j].transpose(-1, -2) @ U[k]).cpu())
+            try:
+                gram = (U[j].transpose(-1, -2) @ U[k]).cpu()
+                if not torch.isfinite(gram).all():
+                    return float("nan")
+                s = torch.linalg.svdvals(gram)
+            except RuntimeError:
+                return float("nan")
             max_cos = max(max_cos, s.max().item())
     max_cos = min(max_cos, 1.0)
     return math.acos(max_cos)

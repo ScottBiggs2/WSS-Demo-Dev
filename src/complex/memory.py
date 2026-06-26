@@ -25,7 +25,7 @@ from collections import defaultdict
 import torch
 import torch.nn as nn
 
-from .superposition import SuperpositionLinear
+from .superposition import SuperpositionLinear, WssTrungLinear
 from .train import build_optimizers
 
 _MB = 1.0e6
@@ -50,6 +50,13 @@ def param_breakdown(model: nn.Module) -> dict:
             cats["U"] += _bytes(mod.U)
             cats["V"] += _bytes(mod.V)
             cats["spectrum"] += _bytes(mod.spectrum.s)
+            if mod.bias is not None:
+                cats["bias"] += _bytes(mod.bias)
+            if mod.gate_alpha is not None:
+                cats["gate_scalars"] += _bytes(mod.gate_alpha) + _bytes(mod.gate_beta)
+        elif isinstance(mod, WssTrungLinear):
+            cats["L"] += _bytes(mod.L)
+            cats["R"] += _bytes(mod.R)
             if mod.bias is not None:
                 cats["bias"] += _bytes(mod.bias)
             if mod.gate_alpha is not None:
@@ -113,10 +120,10 @@ def activation_elems_analytic(model: nn.Module, B: int) -> tuple[int, list[int]]
     total = 0
     per_layer: list[int] = []
     first = layers[0]
-    in0 = first.in_dim if isinstance(first, SuperpositionLinear) else first.in_features
+    in0 = first.in_dim if isinstance(first, (SuperpositionLinear, WssTrungLinear)) else first.in_features
     total += B * in0
     for i, l in enumerate(layers):
-        if isinstance(l, SuperpositionLinear):
+        if isinstance(l, (SuperpositionLinear, WssTrungLinear)):
             J, r, m = l.J, l.r, l.out_dim
             e = 2 * J * B * r + J * B * m + J * B + B * m
             width = m

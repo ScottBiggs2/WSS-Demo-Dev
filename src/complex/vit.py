@@ -24,14 +24,14 @@ import torch.nn as nn
 
 from .config import ViTConfig
 from .models import _min_principal_angle
-from .superposition import SuperpositionLinear, SuperpositionMultiHeadAttn, make_proj
+from .superposition import SuperpositionLinear, SuperpositionMultiHeadAttn, WssTrungLinear, make_proj
 
 
 # ── shared WSS diagnostics (walks all submodules; ViT WSS layers are nested in blocks) ──────────
 class _SuperpositionDiagnosticsMixin:
-    def _named_wss(self) -> list[tuple[str, SuperpositionLinear]]:
+    def _named_wss(self) -> list[tuple[str, nn.Module]]:
         return [(name, m) for name, m in self.named_modules()
-                if isinstance(m, SuperpositionLinear) and m.J > 1]
+                if isinstance(m, (SuperpositionLinear, WssTrungLinear)) and m.J > 1]
 
     def diversity_loss(self) -> torch.Tensor:
         """Sum of D = -(S_L + S_R) over all wss layers (J>1). 0 if none (dense / single_rank).
@@ -42,7 +42,9 @@ class _SuperpositionDiagnosticsMixin:
         wss = [m for _, m in self._named_wss()]
         if not wss:
             return torch.zeros((), device=next(self.parameters()).device)
-        return summed_diversity([m.U for m in wss] + [m.V for m in wss])
+        if all(isinstance(m, SuperpositionLinear) for m in wss):
+            return summed_diversity([m.U for m in wss] + [m.V for m in wss])
+        return torch.stack([m.diversity()["D"] for m in wss]).sum()
 
     @torch.no_grad()
     def diagnostics(self) -> dict:
@@ -52,10 +54,11 @@ class _SuperpositionDiagnosticsMixin:
         out = {}
         for name, m in self._named_wss():
             d = m.diversity()
+            U = m.U.detach() if isinstance(m, SuperpositionLinear) else m.diversity_frames()[0].detach()
             out[name] = {
                 "ENC_L": d["ENC_L"].item(),
                 "ENC_R": d["ENC_R"].item(),
-                "min_principal_angle": _min_principal_angle(m.U.detach()),
+                "min_principal_angle": _min_principal_angle(U),
             }
         return out
 
@@ -131,6 +134,10 @@ class ViT(_SuperpositionDiagnosticsMixin, nn.Module):
             for m in self.modules():
                 if isinstance(m, SuperpositionLinear):
                     m.spectrum.s.add_(log_s)
+                elif isinstance(m, WssTrungLinear):
+                    factor_scale = math.sqrt(scale)
+                    m.L.mul_(factor_scale)
+                    m.R.mul_(factor_scale)
                 elif isinstance(m, nn.Linear) and m is not self.head:
                     m.weight.mul_(scale)
 

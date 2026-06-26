@@ -16,7 +16,7 @@ from complex.superposition import SuperpositionLinear, make_proj
 from complex.train import TrainConfig, _orthonormality, build_optimizers, smoke_train_step
 from complex.vit import ViT
 
-_LAYER_TYPES = ["dense", "single_rank_Jr", "wss"]
+_LAYER_TYPES = ["dense", "single_rank_Jr", "wss", "wss_trung"]
 
 
 def _tiny(layer_type="wss", attn_type="wss_separate", **kw):
@@ -55,7 +55,9 @@ def test_param_budget_and_matched_counts():
     dense = n(ViTConfig(layer_type="dense", attn_type="dense"))
     single = n(ViTConfig(layer_type="single_rank_Jr"))
     wss = n(ViTConfig(layer_type="wss"))
-    assert dense < 1_000_000 and wss < 1_000_000
+    trung = n(ViTConfig(layer_type="wss_trung"))
+    assert dense < 1_000_000 and wss < 1_000_000 and trung < 1_000_000
+    assert trung < wss                         # spectrum is folded into L/R, no separate s params
     assert wss == single                      # matched by construction (J comps rank r == 1 comp rank Jr)
 
 
@@ -187,3 +189,11 @@ def test_per_token_gate_hook_is_read_only():
     assert torch.allclose(clean, hooked, atol=1e-6)
     # (J, B*seq) = (2, 2*5) = (2, 10)
     assert cap["g"].shape == (model.cfg.J, 2 * model.cfg.seq_len)
+
+
+def test_wss_trung_uses_only_euclidean_optimizer():
+    model = ViT(_tiny("wss_trung"))
+    opts = build_optimizers(model, TrainConfig())
+    assert len(opts) == 1
+    assert isinstance(opts[0], torch.optim.Adam)
+    assert _orthonormality(model) == 0.0

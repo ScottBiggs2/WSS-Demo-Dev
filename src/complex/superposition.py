@@ -19,7 +19,7 @@ import torch.nn as nn
 
 from .config import GateConfig, LayerConfig
 from .gate import compute_gate
-from .manifold import make_stiefel_param
+from .manifold import haar_init, make_stiefel_param
 from .spectrum import Spectrum
 
 
@@ -130,15 +130,183 @@ class SuperpositionLinear(nn.Module):
         return None
 
 
+class WssTrungLinear(nn.Module):
+    """Two-factor Euclidean WSS variant.
+
+    Initializes from the same Haar frames and spectrum as SuperpositionLinear, but stores
+    L_j = U_j sqrt(S_j) and R_j = V_j sqrt(S_j) directly as unconstrained Euclidean
+    parameters. The effective component is (X L_j) R_j^T, so no Stiefel retraction is used.
+    """
+
+    def __init__(self, cfg: LayerConfig, *, device=None, dtype=None, generator=None):
+        super().__init__()
+        cfg.validate()
+        self.cfg = cfg
+        n, m, J, r = cfg.in_dim, cfg.out_dim, cfg.J, cfg.r
+        self.in_dim, self.out_dim, self.J, self.r = n, m, J, r
+
+        U = haar_init(n, r, J, dtype=dtype, generator=generator)
+        V = haar_init(m, r, J, dtype=dtype, generator=generator)
+        sigma0 = math.sqrt(2.0 * J * m / r)
+        sqrt_sigma0 = math.sqrt(sigma0)
+        self.L = nn.Parameter((U * sqrt_sigma0).to(device=device, dtype=dtype))
+        self.R = nn.Parameter((V * sqrt_sigma0).to(device=device, dtype=dtype))
+
+        if cfg.use_bias:
+            self.bias = nn.Parameter(torch.zeros(m, device=device, dtype=dtype))
+        else:
+            self.register_parameter("bias", None)
+
+        if cfg.gate.phi == "sigmoid":
+            self.gate_alpha = nn.Parameter(torch.tensor(cfg.gate.alpha_init, device=device, dtype=dtype))
+            self.gate_beta = nn.Parameter(torch.tensor(cfg.gate.beta_init, device=device, dtype=dtype))
+        else:
+            self.register_parameter("gate_alpha", None)
+            self.register_parameter("gate_beta", None)
+
+        self._in_forward = False
+
+    def init_balanced_product(self, target_var: float | None = None, *, generator=None) -> None:
+        """Initialize L/R so Var(sum_k L_ik R_jk) ~= target_var."""
+        with torch.no_grad():
+            total_rank = self.J * self.r
+            target = 2.0 / self.in_dim if target_var is None else float(target_var)
+            std = (target / total_rank) ** 0.25
+            self.L.normal_(0.0, std, generator=generator)
+            self.R.normal_(0.0, std, generator=generator)
+            if self.bias is not None:
+                self.bias.zero_()
+
+    def rescale_effective_weight(self, target_var: float | None = None) -> None:
+        """Rescale L/R so the current effective dense weight has the requested variance."""
+        with torch.no_grad():
+            W = self.materialize_weight()
+            var = W.var(unbiased=False).clamp_min(1e-12)
+            target = torch.tensor(2.0 / self.in_dim if target_var is None else float(target_var),
+                                  device=W.device, dtype=W.dtype)
+            factor = (target / var).sqrt().sqrt()
+            self.L.mul_(factor)
+            self.R.mul_(factor)
+
+    def _orthonormalized(self, X: torch.Tensor) -> torch.Tensor:
+        """Return QR frames spanning current factor columns; parameters stay unconstrained.
+
+        LoRA-style variants can have an all-zero side at initialization. In that rank-degenerate
+        case, use a fixed coordinate frame for diagnostics/diversity so eigvalsh stays well-defined.
+        """
+        q, rmat = torch.linalg.qr(X)
+        sign = rmat.diagonal(dim1=-2, dim2=-1).sign()
+        sign = torch.where(sign == 0, torch.ones_like(sign), sign)
+        q = q * sign.unsqueeze(-2)
+        tiny = X.norm(dim=(-2, -1)) < 1e-12
+        if tiny.any():
+            fallback = torch.zeros(X.shape[-2], X.shape[-1], device=X.device, dtype=X.dtype)
+            fallback[:X.shape[-1], :] = torch.eye(X.shape[-1], device=X.device, dtype=X.dtype)
+            q = q.clone()
+            q[tiny] = fallback
+        return q
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        self._in_forward = True
+        try:
+            lead = X.shape[:-1]
+            n = X.shape[-1]
+            Xf = X.reshape(-1, n)
+            H = torch.einsum("bn,jnr->jbr", Xf, self.L)                 # X L_j
+            g, c = compute_gate(Xf, self.L, self.cfg.gate, self.gate_alpha, self.gate_beta, H=H)
+            Hg = H * g.unsqueeze(-1)
+            Y = torch.einsum("jbr,jmr->jbm", Hg, self.R)                # ... R_j^T
+            out = c * Y.sum(dim=0)
+            if self.bias is not None:
+                out = out + self.bias
+            return out.reshape(*lead, self.out_dim)
+        finally:
+            self._in_forward = False
+
+    def materialize_weight(self, summed: bool = True) -> torch.Tensor:
+        assert not self._in_forward, "materialize_weight() must not be called in the forward hot path"
+        W = torch.einsum("jnr,jmr->jnm", self.L, self.R)
+        if summed:
+            return self.cfg.c * W.sum(dim=0)
+        return W
+
+    def diversity_frames(self) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._orthonormalized(self.L), self._orthonormalized(self.R)
+
+    def diversity(self) -> dict:
+        from .diversity import diversity_penalty
+        Lq, Rq = self.diversity_frames()
+        try:
+            return diversity_penalty(Lq, Rq, self.J, self.r)
+        except RuntimeError:
+            dev = self.L.device
+            dtype = self.L.dtype
+            s = torch.log(torch.tensor(float(self.r), device=dev, dtype=dtype))
+            enc = torch.ones((), device=dev, dtype=dtype)
+            d = torch.zeros((), device=dev, dtype=dtype)
+            return {"S_L": s, "S_R": s, "ENC_L": enc, "ENC_R": enc, "D": d}
+
+
+
+
+def _synthetic_weight(in_dim: int, out_dim: int, target_var: float | None, *, device=None, dtype=None) -> torch.Tensor:
+    target = 2.0 / in_dim if target_var is None else float(target_var)
+    return torch.randn(in_dim, out_dim, device=device, dtype=dtype) * math.sqrt(target)
+
+
+def _svd_factors_from_weight(base_weight: torch.Tensor, in_dim: int, out_dim: int, J: int, r: int,
+                             *, device=None, dtype=None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return L/R chunks from truncated SVD of a dense linear weight."""
+    w = base_weight.detach().to(device=device, dtype=dtype).clone()
+    if w.shape == (out_dim, in_dim):
+        w = w.transpose(0, 1).contiguous()
+    if w.shape != (in_dim, out_dim):
+        raise ValueError(f"base_weight must have shape {(out_dim, in_dim)} or {(in_dim, out_dim)}, got {tuple(base_weight.shape)}")
+    k = J * r
+    U, S, Vh = torch.linalg.svd(w, full_matrices=False)
+    take = min(k, S.numel())
+    Lflat = torch.zeros(in_dim, k, device=w.device, dtype=w.dtype)
+    Rflat = torch.zeros(out_dim, k, device=w.device, dtype=w.dtype)
+    sqrt_s = S[:take].clamp_min(0).sqrt()
+    Lflat[:, :take] = U[:, :take] * sqrt_s.unsqueeze(0)
+    Rflat[:, :take] = Vh[:take, :].transpose(0, 1) * sqrt_s.unsqueeze(0)
+    L = Lflat.reshape(in_dim, J, r).permute(1, 0, 2).contiguous()
+    R = Rflat.reshape(out_dim, J, r).permute(1, 0, 2).contiguous()
+    return L, R
+
+
+def init_wss_trung_from_weight(layer: WssTrungLinear, base_weight: torch.Tensor,
+                               base_bias: torch.Tensor | None = None) -> WssTrungLinear:
+    """Initialize an existing WssTrungLinear from the truncated SVD of a dense weight."""
+    L, R = _svd_factors_from_weight(base_weight, layer.in_dim, layer.out_dim, layer.J, layer.r,
+                                    device=layer.L.device, dtype=layer.L.dtype)
+    with torch.no_grad():
+        scale = 1.0 / layer.cfg.c
+        layer.L.copy_(L * scale)
+        layer.R.copy_(R)
+        if layer.bias is not None:
+            if base_bias is None:
+                layer.bias.zero_()
+            else:
+                layer.bias.copy_(base_bias.detach().to(device=layer.bias.device, dtype=layer.bias.dtype))
+    return layer
+
+
 def make_proj(layer_type: str, in_dim: int, out_dim: int, *, J: int, r: int,
               use_bias: bool = True, gate: GateConfig | None = None,
-              stiefel_canonical: bool = True, device=None, dtype=None) -> nn.Module:
+              stiefel_canonical: bool = True, device=None, dtype=None,
+              base_weight: torch.Tensor | None = None, base_bias: torch.Tensor | None = None,
+              init_target_var: float | None = None) -> nn.Module:
     """Build one projection of the requested family. Shared by models.MLP and the ViT so the
     three baselines (dense / single_rank_Jr / wss) are built from one code path:
 
       * dense          -> nn.Linear
       * single_rank_Jr -> SuperpositionLinear, J=1 at rank J*r, gate forced off (the honest control)
       * wss            -> SuperpositionLinear, J components of rank r, gated
+      * wss_trung      -> WssTrungLinear, same init folded into unconstrained L/R factors
+      * wss_trung_1    -> WssTrungLinear initialized from truncated SVD of base_weight if given
+      * wss_trung_2    -> direct balanced L/R init so LR product has He fan-in variance
+      * wss_trung_3    -> SVD init from base_weight, then rescale effective weight to He variance
 
     stiefel_canonical selects the Stiefel retraction (passed to LayerConfig): True = canonical
     (Cayley/solve, the agent_guide default), False = euclidean (QR). BOTH keep U^T U = I; they
@@ -156,6 +324,22 @@ def make_proj(layer_type: str, in_dim: int, out_dim: int, *, J: int, r: int,
                            stiefel_canonical=stiefel_canonical,
                            gate=gate if gate is not None else GateConfig(phi="softmax"))
         return SuperpositionLinear(lcfg, device=device, dtype=dtype)
+    if layer_type in ("wss_trung", "wss_trung_1", "wss_trung_2", "wss_trung_3"):
+        lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=J, r=r, use_bias=use_bias,
+                           stiefel_canonical=stiefel_canonical,
+                           gate=gate if gate is not None else GateConfig(phi="softmax"))
+        layer = WssTrungLinear(lcfg, device=device, dtype=dtype)
+        if layer_type == "wss_trung_2":
+            layer.init_balanced_product(init_target_var)
+            return layer
+        if layer_type in ("wss_trung_1", "wss_trung_3"):
+            if base_weight is None:
+                base_weight = _synthetic_weight(in_dim, out_dim, init_target_var, device=device, dtype=dtype)
+                base_bias = None
+            init_wss_trung_from_weight(layer, base_weight, base_bias)
+            if layer_type == "wss_trung_3":
+                layer.rescale_effective_weight(init_target_var)
+        return layer
     raise ValueError(f"unknown layer_type {layer_type!r}")
 
 

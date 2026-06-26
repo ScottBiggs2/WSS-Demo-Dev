@@ -194,23 +194,24 @@ def main():
     ap.add_argument("--dataset", default="mnist", help="mnist | fmnist")
     ap.add_argument("--gate_phi", default="softmax", help="softmax gives normalized importances")
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--seed", type=int, default=3)
     args = ap.parse_args()
 
-    torch.manual_seed(0)
+    seed_everything(args.seed)
     device = get_device(args.device)
     dims = [784, 256, 128, 10]
     num_classes = 10
     print(f"device={device} | dataset={args.dataset} | J={args.J} r={args.r} "
-          f"epochs={args.epochs} gate={args.gate_phi}")
+          f"epochs={args.epochs} gate={args.gate_phi} seed={args.seed}")
 
-    train_loader, test_loader = get_loaders(args.dataset, args.batch_size)
+    train_loader, test_loader = get_loaders(args.dataset, args.batch_size, seed=args.seed)
 
     mcfg = ModelConfig(layer_type="wss", dims=dims, J=args.J, r=args.r,
                        gate=GateConfig(phi=args.gate_phi), lambda_div=args.lambda_div)
     model = MLP(mcfg)
     tcfg = TrainConfig(epochs=args.epochs, batch_size=args.batch_size,
                        lr_riemann=args.lr, lr_euclid=args.lr, lambda_div=args.lambda_div,
-                       dataset=args.dataset, device=args.device, stabilize=50)
+                       dataset=args.dataset, device=args.device, stabilize=50, seed=args.seed)
 
     hist = fit(model, train_loader, test_loader, tcfg, device=device)
     print(f"  final test acc: {hist['final_acc']:.3%}")

@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import torch
 from torch.utils.data import DataLoader
+
+from .seed import seed_worker
 from torchvision import datasets, transforms
 
 # <repo_root>/data : data.py is at src/complex/data.py -> parents[2] == repo root
@@ -51,6 +54,7 @@ def get_loaders(
     root: str | None = None,
     num_workers: int = 0,
     augment: bool = True,
+    seed: int | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     dataset = dataset.lower()
     if dataset not in _DATASETS:
@@ -61,6 +65,10 @@ def get_loaders(
                     transform=_build_transform(dataset, train=True, augment=augment))
     test_set = cls(root, train=False, download=True,
                    transform=_build_transform(dataset, train=False, augment=augment))
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-    test_loader = DataLoader(test_set, batch_size=test_batch_size, shuffle=False, num_workers=num_workers)
+    generator = torch.Generator().manual_seed(seed) if seed is not None else None
+    worker_init_fn = seed_worker if seed is not None else None
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+                              generator=generator, worker_init_fn=worker_init_fn)
+    test_loader = DataLoader(test_set, batch_size=test_batch_size, shuffle=False, num_workers=num_workers,
+                             worker_init_fn=worker_init_fn)
     return train_loader, test_loader

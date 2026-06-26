@@ -68,9 +68,9 @@ class LayerConfig:
 
 @dataclass
 class ModelConfig:
-    """An MLP built from one of three interchangeable layer types."""
+    """An MLP built from interchangeable layer types."""
 
-    layer_type: str = "wss"                                   # {"dense","single_rank_Jr","wss"}
+    layer_type: str = "wss"                                   # {"dense","single_rank_Jr","wss","wss_trung","wss_trung_1","wss_trung_2","wss_trung_3"}
     dims: list[int] = field(default_factory=lambda: [784, 256, 128, 10])
     J: int = 4
     r: int = 16
@@ -79,7 +79,7 @@ class ModelConfig:
     lambda_div: float = 1e-2                                   # diversity penalty weight
 
     def validate(self) -> None:
-        assert self.layer_type in ("dense", "single_rank_Jr", "wss"), self.layer_type
+        assert self.layer_type in ("dense", "single_rank_Jr", "wss", "wss_trung", "wss_trung_1", "wss_trung_2", "wss_trung_3"), self.layer_type
         assert len(self.dims) >= 2, "need at least input and output dims"
         self.gate.validate()
 
@@ -106,7 +106,7 @@ class ViTConfig:
     a conventional dense attention block (attn_type="dense").
     """
 
-    layer_type: str = "wss"                 # {"dense","single_rank_Jr","wss"} -- all WSS projections
+    layer_type: str = "wss"                 # {"dense","single_rank_Jr","wss","wss_trung","wss_trung_1","wss_trung_2","wss_trung_3"} -- all WSS projections
     attn_type: str = "wss_separate"         # one of ATTN_KINDS
     img_size: int = 32
     patch_size: int = 4
@@ -144,7 +144,7 @@ class ViTConfig:
         return self.n_patches + 1            # + cls token
 
     def validate(self) -> None:
-        assert self.layer_type in ("dense", "single_rank_Jr", "wss"), self.layer_type
+        assert self.layer_type in ("dense", "single_rank_Jr", "wss", "wss_trung", "wss_trung_1", "wss_trung_2", "wss_trung_3"), self.layer_type
         assert self.attn_type in ATTN_KINDS, f"bad attn_type {self.attn_type!r}, expected {ATTN_KINDS}"
         assert self.img_size % self.patch_size == 0, "img_size must be divisible by patch_size"
         assert self.dim % self.heads == 0, f"dim={self.dim} not divisible by heads={self.heads}"
@@ -163,7 +163,7 @@ class TrainConfig:
     lr_euclid: float = 1e-3        # Adam for Euclidean params (s, bias, gate scalars)
     lambda_div: float = 1e-2
     dataset: str = "mnist"
-    seed: int = 0
+    seed: int = 3
     device: str = "auto"
     retraction: bool = True        # False -> Remark-8 control (plain SGD on raw .data, no retraction)
     stabilize: int = 50            # RiemannianAdam re-projection cadence (steps)

@@ -41,6 +41,7 @@ from complex.config import GateConfig, TrainConfig, ViTConfig
 from complex.data import get_loaders
 from complex.device import get_device
 from complex.memory import measure_breakdown
+from complex.seed import seed_everything
 from complex.train import fit
 from complex.vit import ViT
 
@@ -99,26 +100,24 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--no_augment", action="store_true", help="disable CIFAR train augmentation")
     ap.add_argument("--runs", default="all",
-                    help="subset of {dense,single_rank_Jr,wss,wss_div0,wss_no_retraction} or 'all'")
+                    help="subset of {dense,single_rank_Jr,wss,wss_div0,wss_no_retraction,wss_trung,wss_trung_div0,wss_trung_1,wss_trung_2,wss_trung_3} or 'all'")
     ap.add_argument("--quick", action="store_true", help="2 epochs, for a fast sanity check")
+    ap.add_argument("--seed", type=int, default=3, help="shared seed reset before every run")
     args = ap.parse_args()
 
     if args.quick:
         args.epochs = 2
 
-    torch.manual_seed(0)
+    seed_everything(args.seed)
     device = get_device(args.device)
     dataset = "cifar10"
     print(f"device={device} | dataset={dataset} | dim={args.dim} depth={args.depth} heads={args.heads} "
           f"mlp_ratio={args.mlp_ratio} J={args.J} r={args.r} lambda_div={args.lambda_div} "
-          f"epochs={args.epochs} gate={args.gate_phi} init_scale={args.init_scale}")
-
-    train_loader, test_loader = get_loaders(dataset, args.batch_size, augment=not args.no_augment)
-    mem_batch = next(iter(train_loader))   # representative batch for the memory breakdown
+          f"epochs={args.epochs} gate={args.gate_phi} init_scale={args.init_scale} seed={args.seed}")
 
     tcfg_base = dict(epochs=args.epochs, batch_size=args.batch_size,
                      lr_riemann=args.lr_riemann, lr_euclid=args.lr_euclid,
-                     dataset=dataset, device=args.device, stabilize=50)
+                     dataset=dataset, device=args.device, stabilize=50, seed=args.seed)
     # reproj to stiefel every 50 (or stabilize) optimizer steps
 
     # (layer_type, attn_type, lambda_div, retraction)
@@ -128,12 +127,20 @@ def main():
         "wss":               ("wss",            "wss_separate", args.lambda_div, True),
         "wss_div0":          ("wss",            "wss_separate", 0.0,             True),
         "wss_no_retraction": ("wss",            "wss_separate", args.lambda_div, False),
+        "wss_trung":         ("wss_trung",      "wss_separate", args.lambda_div, True),
+        "wss_trung_div0":    ("wss_trung",      "wss_separate", 0.0,             True),
+        "wss_trung_1":       ("wss_trung_1",    "wss_separate", args.lambda_div, True),
+        "wss_trung_2":       ("wss_trung_2",    "wss_separate", args.lambda_div, True),
+        "wss_trung_3":       ("wss_trung_3",    "wss_separate", args.lambda_div, True),
     }
     selected = list(all_runs) if args.runs == "all" else [s.strip() for s in args.runs.split(",")]
-    runs = [build_run(name, *all_runs[name], args, tcfg_base) for name in selected]
 
     results, histories = [], {}
-    for name, model, tcfg in runs:
+    for run_name in selected:
+        seed_everything(args.seed)
+        train_loader, test_loader = get_loaders(dataset, args.batch_size,
+                                                augment=not args.no_augment, seed=args.seed)
+        name, model, tcfg = build_run(run_name, *all_runs[run_name], args, tcfg_base)
         n_params = count_params(model)
         print(f"\n=== {name}  ({n_params:,} params) ===")
         hist = fit(model, train_loader, test_loader, tcfg, device=device)
@@ -145,6 +152,9 @@ def main():
             **final_enc(hist),
         }
         try:
+            seed_everything(args.seed)
+            mem_loader, _ = get_loaders(dataset, args.batch_size, augment=not args.no_augment, seed=args.seed)
+            mem_batch = next(iter(mem_loader))
             mem = measure_breakdown(model, tcfg, mem_batch, device=device)
             row.update({k: mem[k] for k in _MEM_KEYS})
         except Exception as e:
@@ -189,6 +199,11 @@ def main():
     if "wss" in acc and "wss_no_retraction" in acc:
         print(f"  Remark-8 (retraction on/off): acc {acc['wss']:.3%}/{acc['wss_no_retraction']:.3%}  "
               f"ortho {ortho['wss']:.1e}/{ortho['wss_no_retraction']:.1e}")
+    if "wss_trung" in acc and "single_rank_Jr" in acc:
+        print(f"  wss_trung vs single_rank_Jr:  {acc['wss_trung'] - acc['single_rank_Jr']:+.3%} "
+              f"(two-factor Euclidean variant)")
+    if enc.get("wss_trung") is not None and enc.get("wss_trung_div0") is not None:
+        print(f"  wss_trung ENC_L div/on-off:   {enc['wss_trung']:.3f} / {enc['wss_trung_div0']:.3f}")
 
     # ── persist CSV + JSON + plot ─────────────────────────────────────────────────
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -226,7 +241,8 @@ def _plot(histories, results, path, args, dataset):
     axes[1].legend(fontsize=8); axes[1].grid(alpha=0.3)
 
     for name, h in histories.items():
-        axes[2].plot(h["epoch"], h["ortho_err"], marker="o", label=name)
+        ortho = [max(v, 1e-12) for v in h["ortho_err"]]
+        axes[2].plot(h["epoch"], ortho, marker="o", label=name)
     axes[2].set(title="Orthonormality error", xlabel="epoch", ylabel="||UᵀU-I||∞", yscale="log")
     axes[2].legend(fontsize=8); axes[2].grid(alpha=0.3)
 
