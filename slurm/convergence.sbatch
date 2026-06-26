@@ -28,8 +28,9 @@
 
 set -euo pipefail
 
-REPO="${WSS_REPO:-$HOME/Telecom-Paris-Collab/simplified}"
-CONDA_ENV="${WSS_ENV:-wss}"
+# Repo path + conda env PREFIX on the cluster (overridable via env vars).
+REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
+CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
 EPOCHS="${WSS_EPOCHS:-10}"
 
 module load anaconda3 2>/dev/null || module load miniconda3 2>/dev/null || true
