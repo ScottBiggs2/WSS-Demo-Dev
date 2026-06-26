@@ -47,13 +47,26 @@ def make_stiefel_param(
     J: int | None = None,
     *,
     canonical: bool = True,
+    retraction_method: str = "auto",
+    retract_every: int = 1,
     device: torch.device | str | None = None,
     dtype: torch.dtype | None = None,
     generator: torch.Generator | None = None,
 ) -> geoopt.ManifoldParameter:
-    """Create a Haar-initialized Stiefel ManifoldParameter of shape (J, n, r) (or (n, r))."""
+    """Create a Haar-initialized Stiefel ManifoldParameter of shape (J, n, r) (or (n, r)).
+
+    The retraction is selected by ``retraction_method`` (perf branch, src/complex/retraction/):
+    "auto" preserves the legacy ``canonical`` boolean exactly (canonical/qr); "newton_schulz" is
+    a matmul-only faithful alternative; "none" + ``retract_every>1`` are NON-FAITHFUL controls.
+    A FRESH manifold instance is built per parameter (required for the lazy per-instance step
+    counter -- see retraction/lazy.py).
+    """
+    from .retraction import make_stiefel_manifold
+
     data = haar_init(n, r, J, device=device, dtype=dtype, generator=generator)
-    manifold = geoopt.Stiefel(canonical=canonical)
+    manifold = make_stiefel_manifold(
+        retraction_method, stiefel_canonical=canonical, retract_every=retract_every
+    )
     return geoopt.ManifoldParameter(data, manifold=manifold)
 
 

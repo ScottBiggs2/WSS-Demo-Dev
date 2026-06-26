@@ -23,6 +23,17 @@ def enable_mps_fallback() -> None:
     os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 
+def needs_cpu_linalg(device: torch.device | str) -> bool:
+    """True iff dense-linalg ops (eigvalsh/qr/svd/solve) must be routed to CPU on this device.
+
+    These have NO MPS kernel in torch 2.3.1, so on MPS we run them on CPU explicitly. On CUDA
+    and CPU they are native -- routing to CPU there would be a pointless device round-trip and a
+    host sync every step. This predicate is the single switch the hot-path callers (diversity
+    eigvalsh) use to keep MPS behavior byte-identical while going on-device on CUDA.
+    """
+    return torch.device(device).type == "mps"
+
+
 def get_device(pref: str = "auto") -> torch.device:
     """Resolve a torch.device. ``pref`` in {"auto","mps","cuda","cpu"}."""
     if pref != "auto":

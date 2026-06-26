@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 PHI_KINDS = ("linear", "exp", "sigmoid", "pow", "softmax")
 NORMALIZED_PHI = frozenset({"softmax"})
 
+# Stiefel retraction methods (perf branch -- see src/complex/retraction/). "auto" preserves the
+# legacy stiefel_canonical boolean exactly: canonical (Cayley/solve) if True, qr (Euclidean) if
+# False. "newton_schulz" is a matmul-only faithful alternative; "none" is a NON-FAITHFUL control.
+RETRACTION_METHODS = ("auto", "canonical", "qr", "newton_schulz", "none")
+
 
 @dataclass
 class GateConfig:
@@ -46,6 +51,11 @@ class LayerConfig:
     r: int
     use_bias: bool = True
     stiefel_canonical: bool = True   # canonical (Cayley/solve) vs euclidean (QR) retraction
+    # Perf branch: pluggable retraction. "auto" -> canonical/qr from stiefel_canonical (legacy
+    # behavior); "newton_schulz" matmul-only faithful alt; "none" NON-FAITHFUL control.
+    retraction_method: str = "auto"
+    # Re-orthonormalize only every K steps (NON-FAITHFUL when > 1; qr/newton_schulz only).
+    retract_every: int = 1
 
     # A swap for consistency and checking impacts on interp demo
     # gate: GateConfig = field(default_factory=GateConfig)
@@ -58,6 +68,9 @@ class LayerConfig:
         # Stiefel St(r, n) requires r <= n (orthonormal columns); same for m.
         assert self.r <= self.in_dim, f"r={self.r} must be <= in_dim={self.in_dim} (Stiefel)"
         assert self.r <= self.out_dim, f"r={self.r} must be <= out_dim={self.out_dim} (Stiefel)"
+        assert self.retraction_method in RETRACTION_METHODS, (
+            f"bad retraction_method {self.retraction_method!r}, expected {RETRACTION_METHODS}")
+        assert self.retract_every >= 1, "retract_every must be >= 1"
         self.gate.validate()
 
     @property
@@ -123,6 +136,11 @@ class ViTConfig:
     # default); False = euclidean (QR). Both keep U^T U = I; euclidean is markedly faster on M1
     # (the retraction is the bottleneck) and is a faithful alternative -- see make_proj.
     stiefel_canonical: bool = True
+    # Perf branch: pluggable retraction for all wss projections (see src/complex/retraction/).
+    # "auto" reproduces stiefel_canonical exactly. "newton_schulz" is a matmul-only faithful
+    # alternative (GPU-ideal); "none" + retract_every>1 are NON-FAITHFUL controls, default off.
+    retraction_method: str = "auto"
+    retract_every: int = 1
     gate: GateConfig = field(default_factory=lambda: GateConfig(phi="softmax"))
     lambda_div: float = 1e-3
     # Faithfulness knob: the WSS contract inits the spectrum at sigma0 = sqrt(2*J*m/r) (He fan-in).
@@ -152,6 +170,9 @@ class ViTConfig:
         # single_rank_Jr factorizes the dim->dim projections at rank J*r -> Stiefel needs J*r <= dim.
         assert self.J * self.r <= self.dim, (
             f"J*r={self.J * self.r} must be <= dim={self.dim} (Stiefel r<=out_dim on dim->dim proj)")
+        assert self.retraction_method in RETRACTION_METHODS, (
+            f"bad retraction_method {self.retraction_method!r}, expected {RETRACTION_METHODS}")
+        assert self.retract_every >= 1, "retract_every must be >= 1"
         self.gate.validate()
 
 @dataclass

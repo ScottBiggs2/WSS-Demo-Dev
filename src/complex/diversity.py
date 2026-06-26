@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import torch
 
+from .device import needs_cpu_linalg
+
 
 def stack_frames(U: torch.Tensor) -> torch.Tensor:
     """(J, n, r) -> (n, J*r): columns are [U_1 | U_2 | ... | U_J]."""
@@ -35,8 +37,10 @@ def von_neumann(U: torch.Tensor, J: int, r: int, eps: float = 1e-12) -> tuple[to
     n = U.shape[1]
     U_cols = stack_frames(U)                                # (n, Jr)
     G = gram(U_cols, J)                                     # (Jr, Jr)
-    G_cpu = G.cpu()
-    lam = torch.linalg.eigvalsh(G_cpu)                      # (Jr,) ascending, CPU
+    # MPS has no eigvalsh kernel -> CPU there (its backward is also more robust on CPU); native
+    # on CUDA/CPU so we stay on-device and avoid a host round-trip + sync. See device.needs_cpu_linalg.
+    work = G.cpu() if needs_cpu_linalg(G.device) else G
+    lam = torch.linalg.eigvalsh(work)                       # (Jr,) ascending
     p = lam.clamp_min(eps)
     p = p / p.sum()                                         # unit trace
     S = -(p * p.log()).sum()                                # scalar (CPU)
@@ -77,17 +81,22 @@ def summed_diversity(frames: list[torch.Tensor], eps: float = 1e-12) -> torch.Te
     dev = frames[0].device
     grams = [gram(stack_frames(U), U.shape[0]) for U in frames]   # each (Jr, Jr); /J cancels below
     sizes = {g.shape[-1] for g in grams}
+    # eigvalsh is CPU-only on MPS (no kernel; backward more robust); native on CUDA/CPU, so there
+    # we keep it on-device -- removing the per-step GPU->CPU->GPU sync. See device.needs_cpu_linalg.
+    cpu_linalg = needs_cpu_linalg(dev)
     if len(sizes) == 1:
         g_stack = torch.stack(grams, dim=0)                       # (N, Jr, Jr)
-        lam = torch.linalg.eigvalsh(g_stack.cpu())                # (N, Jr) -- ONE batched eig, ONE sync
+        work = g_stack.cpu() if cpu_linalg else g_stack
+        lam = torch.linalg.eigvalsh(work)                         # (N, Jr) -- ONE batched eig
         p = lam.clamp_min(eps)
         p = p / p.sum(dim=-1, keepdim=True)                       # per-frame unit trace
-        S = -(p * p.log()).sum(dim=-1).sum()                      # scalar (CPU)
+        S = -(p * p.log()).sum(dim=-1).sum()                      # scalar
         return (-S).to(dev)
     # Mixed Jr (not produced by the current models): fall back to per-frame, same math.
-    total = torch.zeros((), device="cpu")
+    total = torch.zeros((), device="cpu" if cpu_linalg else dev)
     for g in grams:
-        lam = torch.linalg.eigvalsh(g.cpu())
+        work = g.cpu() if cpu_linalg else g
+        lam = torch.linalg.eigvalsh(work)
         p = lam.clamp_min(eps); p = p / p.sum()
         total = total - (p * p.log()).sum()
     return (-total).to(dev)

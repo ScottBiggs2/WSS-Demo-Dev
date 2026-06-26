@@ -31,12 +31,17 @@ class SuperpositionLinear(nn.Module):
         n, m, J, r = cfg.in_dim, cfg.out_dim, cfg.J, cfg.r
         self.in_dim, self.out_dim, self.J, self.r = n, m, J, r
 
-        # Stiefel frames, stacked (J, n, r) / (J, m, r). One ManifoldParameter each.
+        # Stiefel frames, stacked (J, n, r) / (J, m, r). One ManifoldParameter each (a fresh
+        # manifold instance per frame -- required for the lazy retraction's per-param step counter).
         self.U = make_stiefel_param(
-            n, r, J, canonical=cfg.stiefel_canonical, device=device, dtype=dtype, generator=generator
+            n, r, J, canonical=cfg.stiefel_canonical,
+            retraction_method=cfg.retraction_method, retract_every=cfg.retract_every,
+            device=device, dtype=dtype, generator=generator
         )
         self.V = make_stiefel_param(
-            m, r, J, canonical=cfg.stiefel_canonical, device=device, dtype=dtype, generator=generator
+            m, r, J, canonical=cfg.stiefel_canonical,
+            retraction_method=cfg.retraction_method, retract_every=cfg.retract_every,
+            device=device, dtype=dtype, generator=generator
         )
 
         # Spectrum: He fan-in init sigma0 = sqrt(2 J m / r) (agent_guide §2.7, §0.4).
@@ -294,7 +299,8 @@ def init_wss_trung_from_weight(layer: WssTrungLinear, base_weight: torch.Tensor,
 
 def make_proj(layer_type: str, in_dim: int, out_dim: int, *, J: int, r: int,
               use_bias: bool = True, gate: GateConfig | None = None,
-              stiefel_canonical: bool = True, device=None, dtype=None,
+              stiefel_canonical: bool = True, retraction_method: str = "auto",
+              retract_every: int = 1, device=None, dtype=None,
               base_weight: torch.Tensor | None = None, base_bias: torch.Tensor | None = None,
               init_target_var: float | None = None) -> nn.Module:
     """Build one projection of the requested family. Shared by models.MLP and the ViT so the
@@ -317,16 +323,19 @@ def make_proj(layer_type: str, in_dim: int, out_dim: int, *, J: int, r: int,
         return nn.Linear(in_dim, out_dim, bias=use_bias, device=device, dtype=dtype)
     if layer_type == "single_rank_Jr":
         lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=1, r=J * r, use_bias=use_bias,
-                           stiefel_canonical=stiefel_canonical, gate=GateConfig(phi="linear", disabled=True))
+                           stiefel_canonical=stiefel_canonical, retraction_method=retraction_method,
+                           retract_every=retract_every, gate=GateConfig(phi="linear", disabled=True))
         return SuperpositionLinear(lcfg, device=device, dtype=dtype)
     if layer_type == "wss":
         lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=J, r=r, use_bias=use_bias,
-                           stiefel_canonical=stiefel_canonical,
+                           stiefel_canonical=stiefel_canonical, retraction_method=retraction_method,
+                           retract_every=retract_every,
                            gate=gate if gate is not None else GateConfig(phi="softmax"))
         return SuperpositionLinear(lcfg, device=device, dtype=dtype)
     if layer_type in ("wss_trung", "wss_trung_1", "wss_trung_2", "wss_trung_3"):
         lcfg = LayerConfig(in_dim=in_dim, out_dim=out_dim, J=J, r=r, use_bias=use_bias,
-                           stiefel_canonical=stiefel_canonical,
+                           stiefel_canonical=stiefel_canonical, retraction_method=retraction_method,
+                           retract_every=retract_every,
                            gate=gate if gate is not None else GateConfig(phi="softmax"))
         layer = WssTrungLinear(lcfg, device=device, dtype=dtype)
         if layer_type == "wss_trung_2":
@@ -362,7 +371,8 @@ class SuperpositionMultiHeadAttn(nn.Module):
 
     def __init__(self, dim: int, heads: int, layer_type: str, *, J: int, r: int,
                  use_bias: bool = True, gate: GateConfig | None = None,
-                 stiefel_canonical: bool = True, device=None, dtype=None):
+                 stiefel_canonical: bool = True, retraction_method: str = "auto",
+                 retract_every: int = 1, device=None, dtype=None):
         super().__init__()
         assert dim % heads == 0, f"dim={dim} not divisible by heads={heads}"
         self.dim, self.heads = dim, heads
@@ -371,7 +381,8 @@ class SuperpositionMultiHeadAttn(nn.Module):
 
         def mk(i, o):
             return make_proj(layer_type, i, o, J=J, r=r, use_bias=use_bias, gate=gate,
-                             stiefel_canonical=stiefel_canonical, device=device, dtype=dtype)
+                             stiefel_canonical=stiefel_canonical, retraction_method=retraction_method,
+                             retract_every=retract_every, device=device, dtype=dtype)
 
         # Separate Q/K/V/O (each its own frames/gate/spectrum when wss) -- user-chosen design.
         self.q_proj, self.k_proj, self.v_proj, self.o_proj = mk(dim, dim), mk(dim, dim), mk(dim, dim), mk(dim, dim)
