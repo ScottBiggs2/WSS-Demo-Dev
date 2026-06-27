@@ -20,8 +20,9 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G                       # 10m-tier ViTs (~12.5M params) need more headroom than 1m
-#SBATCH --gres=gpu:1                    # 100k: ANY free gpu (a100s are saturated; v100s sit idle).
-                                        # For 1m/10m or strictly comparable it/s, pin gpu:a100:1.
+#SBATCH --gres=gpu:v100-sxm2:1          # PINNED to one GPU model so throughput is comparable across
+                                        # the whole array (v100-sxm2 is abundant -> schedules fast).
+                                        # Swap to gpu:a100:1 / gpu:h200:1 for those numbers; 1m/10m want a100.
 #SBATCH --time=02:00:00                 # ceiling; profiling itself takes minutes even at 10m
 #SBATCH --partition=gpu                 # REQUIRED -- the default partition has no GPUs, so omitting
                                         # this fails with "node config not available".

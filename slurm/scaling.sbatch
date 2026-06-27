@@ -18,7 +18,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --gres=gpu:1                      # 100k: any free gpu (a100s saturated). 1m/10m: pin gpu:a100:1
+#SBATCH --gres=gpu:v100-sxm2:1            # PINNED to one GPU model so runs are comparable (abundant -> fast). 1m/10m: gpu:a100:1
 #SBATCH --time=08:00:00                   # 8h cap; 10m configs may need the epoch-cap mitigation
 #SBATCH --partition=gpu                   # the A100 partition. REQUIRED (see profile.sbatch note)
 

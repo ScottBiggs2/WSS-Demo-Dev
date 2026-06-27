@@ -15,7 +15,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1                     # 100k: any free gpu (a100s saturated)
+#SBATCH --gres=gpu:v100-sxm2:1           # PINNED to one GPU model so runs are comparable (abundant -> fast)
 #SBATCH --time=04:00:00                  # trains twice (fp32 + bf16); 100k is fast
 #SBATCH --partition=gpu                  # the A100 partition. REQUIRED (see profile.sbatch note)
 
