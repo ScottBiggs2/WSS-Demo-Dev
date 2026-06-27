@@ -165,6 +165,53 @@ def _load_scaling(perf_dir: Path, dev: str) -> list[dict]:
     return rows
 
 
+def _load_lr_sweep(perf_dir: Path, dev: str) -> list[dict]:
+    """Read every lr_sweep_<tier>_cfg<idx>_<dev>.csv (lr_sweep output), ordered by index."""
+    files = sorted(glob.glob(str(perf_dir / f"lr_sweep_*_cfg*_{dev}.csv")), key=_cfg_idx)
+    rows: list[dict] = []
+    for f in files:
+        with open(f, newline="") as fh:
+            rows.extend(csv.DictReader(fh))
+    return rows
+
+
+def _lr_sweep_table(rows: list[dict]) -> str:
+    """Per-method LR calibration (Stage 0.5). Marks the best-acc LR per method (★) so the Stage-1
+    headline can pin each method to its own optimum -- LR is not a fair shared axis across geometries."""
+    if not rows:
+        return "_(no lr_sweep CSVs found)_"
+    # group by method, preserving first-seen (config-index) order
+    order: list[str] = []
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        m = r.get("method") or r.get("label", "?")
+        if m not in groups:
+            groups[m] = []
+            order.append(m)
+        groups[m].append(r)
+
+    body, summary = [], []
+    for m in order:
+        rs = sorted(groups[m], key=lambda r: _f(r, "lr_value"))
+        best = max(rs, key=lambda r: _f(r, "final_acc"))
+        for r in rs:
+            acc = _f(r, "final_acc")
+            body.append([
+                m, r.get("lr_swept", "-"), f"{_f(r, 'lr_value'):.0e}",
+                f"{acc * 100:.2f}%" if acc == acc else "-",
+                f"{_f(r, 'final_ortho_err'):.1e}",
+                f"{_f(r, 'steps_per_sec'):.1f}",
+                "★" if r is best else "",
+            ])
+        summary.append(f"{m}: {best.get('lr_swept', '?')}={_f(best, 'lr_value'):.0e} "
+                       f"({_f(best, 'final_acc') * 100:.2f}%)")
+    header = ["method", "lr group", "lr", "final acc", "ortho err", "it/s", "best"]
+    note = ("\n\n_Best LR per method: " + " · ".join(summary) +
+            ". Pin each method to its own best LR for the Stage-1 headline (LR is per-geometry, not a "
+            "shared axis); record the lr_riemann(wss) / lr_euclid(dense) ratio as a finding._")
+    return _md_table(header, body) + note
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dir", default=str(PERF_DIR), help="dir holding the per-config CSVs")
@@ -183,15 +230,19 @@ def main() -> None:
         conv = _load_group(perf_dir, "convergence", dev)
         parity = _load_group(perf_dir, "parity", dev)
         scaling = _load_scaling(perf_dir, dev)
-        if not (prof or conv or parity or scaling):
+        lr_sweep = _load_lr_sweep(perf_dir, dev)
+        if not (prof or conv or parity or scaling or lr_sweep):
             print(f"[{dev}] no CSVs in {perf_dir}")
             continue
         _merge_write(prof, perf_dir / f"profile_all_{dev}.csv")
         _merge_write(conv, perf_dir / f"convergence_all_{dev}.csv")
         _merge_write(parity, perf_dir / f"parity_all_{dev}.csv")
         _merge_write(scaling, perf_dir / f"scaling_all_{dev}.csv")
+        _merge_write(lr_sweep, perf_dir / f"lr_sweep_all_{dev}.csv")
         print(f"\n## Throughput / phase attribution ({dev})\n")
         print(_profile_table(prof))
+        print(f"\n## LR calibration — best LR per method (Stage 0.5) ({dev})\n")
+        print(_lr_sweep_table(lr_sweep))
         print(f"\n## fp32-vs-bf16 parity — trust gate ({dev})\n")
         print(_parity_table(parity))
         print(f"\n## Convergence — param-matched accuracy ({dev})\n")

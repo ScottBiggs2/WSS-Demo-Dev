@@ -3,7 +3,7 @@
 Single-GPU (A100/H200), ≤8h jobs for the WSS scaling/ablation study on **CIFAR-100** ViTs at three
 param tiers (~100K / 1M / 10M). The codebase was developed on M1/MPS; these run it on CUDA in **bf16
 autocast** (matmuls bf16, linalg fp32) with TF32 GEMM. The funnel screens cheap and promotes winners
-(see `PERF_NOTES.md` / the plan): Stage 0 gates → 100K headline → scaling sweeps → 1M → 10M.
+(see `PERF_NOTES.md` / the plan): Stage 0 gates → LR calibration → 100K headline → scaling sweeps → 1M → 10M.
 
 ## What runs
 
@@ -16,6 +16,12 @@ Arrays ship **trimmed** to fit job/time limits; the full grid stays in `build_co
   task; `--profiler` dumps a kernel table + chrome trace. `--array=0-29` for the full grid.
 - **`parity.sbatch`** — **Stage-0c trust gate**: `--mode parity` trains 100k-wss-newton_schulz twice
   (fp32 then bf16, same seed) and reports Δacc / Δortho. Pass this gate before trusting any bf16 run.
+- **`lr_sweep.sbatch`** — **Stage-0.5 LR calibration** (`lr_sweep.py`), run BEFORE the Stage-1
+  headline. LR is not a fair shared axis across geometries: WSS carries its weight in the Stiefel
+  frames, so it needs a larger `lr_riemann` than dense's `lr_euclid` (W=U·S·Vᵀ is bilinear → the
+  frames must rotate a finite angle per step). Sweeps each method's primary LR group (default 3
+  methods × 4 LRs = 12 jobs/tier; chunk `--array=0-7` then `8-11`); `collect_results.py` prints the
+  best LR per method to pin into the headline. Tier via `WSS_TIER`.
 - **`convergence.sbatch`** — the **Stage-1 headline** (100k tier): does wss beat the EQUAL-PARAM
   dense (`dense_matched`)? `--array=0,1,3,6,7` = {dense, dense_matched, single_rank_Jr-ns, wss-ns,
   wss-none}. Promote to 1m/10m by widening the array (10,11,13,16 / 20,21,23,26) with `WSS_EPOCHS` set.
@@ -45,7 +51,7 @@ Within each tier, wss spans the retraction sweep: canonical / qr / newton_schulz
 
 ## Cluster settings (pre-filled for this cluster)
 
-All four `.sbatch` files are set up for the current cluster: `--partition=gpu`, `--gres=gpu:1`,
+All five `.sbatch` files are set up for the current cluster: `--partition=gpu`, `--gres=gpu:1`,
 `--nodes=1 --ntasks-per-node=1`, `REPO=/home/biggs.s/WSS-Demo-Dev`,
 `WSS_ENV=/scratch/biggs.s/conda_envs/wss`, `WSS_CONDA_BASE=/home/biggs.s/miniconda`. The 100k jobs
 ask for a generic `--gres=gpu:1` (the a100s are usually saturated; the abundant v100s schedule
@@ -53,7 +59,7 @@ immediately) — re-add `--gres=gpu:a100:1` for the 1m/10m tiers or for strictly
 `--partition=gpu` is **required** — the default partition has no GPUs, so omitting it fails with
 *"Requested node configuration is not available."*
 
-A teammate on a different cluster edits, in ALL FOUR files:
+A teammate on a different cluster edits, in ALL FIVE files:
 
 | Directive / var        | Set to                                                        |
 |------------------------|---------------------------------------------------------------|
@@ -81,7 +87,10 @@ python src/complex/experiments/profile_retraction.py --mode profile --config 6 -
 # the funnel -- ONE stage at a time, each <= 8 jobs, next only when `squeue --me` is empty:
 bash slurm/submit_all.sh          # Stage 0: profiling only (5 tasks). Prints the follow-ups.
 squeue --me                       # wait until empty, then:
-sbatch slurm/parity.sbatch && sbatch slurm/convergence.sbatch   # Stage 0c + Stage 1 (1 + 5)
+sbatch slurm/parity.sbatch        # Stage 0c trust gate (1 task)
+WSS_TIER=100k sbatch slurm/lr_sweep.sbatch   # Stage 0.5 LR calibration (--array=0-7 then 8-11)
+# read the best LR per method (collect_results -> "LR calibration" table), pin into the headline:
+sbatch slurm/convergence.sbatch   # Stage 1 headline (5 tasks), each method at its calibrated LR
 # after the headline gate passes, the iso-param scaling sweeps -- chunk each tier to <= 8:
 WSS_TIER=100k sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-14 once it drains
 WSS_TIER=1m   sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-15
@@ -90,7 +99,7 @@ WSS_TIER=10m  sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-13 (
 
 Outputs land in `src/complex/experiments/outputs/perf/` (`profile_cfg<idx>_cuda.csv`,
 `convergence_cfg<idx>_cuda.csv`, `parity_cfg<idx>_cuda.csv`, `scaling_<tier>_cfg<idx>_cuda.csv`,
-`profiler_*.txt`, `trace_*.json`).
+`lr_sweep_<tier>_cfg<idx>_cuda.csv`, `profiler_*.txt`, `trace_*.json`).
 
 Merge + format them with the collector (pure stdlib, runs anywhere):
 

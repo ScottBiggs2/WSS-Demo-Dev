@@ -19,11 +19,17 @@ Submitted. Watch:  squeue --me
 
 Run the rest by hand, each only when `squeue --me` is empty (8-job cap), each <= 8 tasks:
 
-  # Stage 0c + Stage 1  (parity = 1 task, convergence = 5 tasks; 6 <= 8):
-  sbatch slurm/parity.sbatch && sbatch slurm/convergence.sbatch
+  # Stage 0c trust gate (1 task):
+  sbatch slurm/parity.sbatch
 
-  # Collect results -> markdown tables for PERF_NOTES.md:
+  # Stage 0.5 LR calibration -- BEFORE the headline (12 jobs/tier, chunk to <= 8):
+  WSS_TIER=100k sbatch slurm/lr_sweep.sbatch               # --array=0-7, then --array=8-11
+
+  # Collect results -> markdown tables (incl. the "LR calibration" best-LR-per-method table):
   python src/complex/experiments/collect_results.py
+
+  # Stage 1 headline -- run EACH method at its calibrated best LR (edit --lr_riemann/--lr_euclid):
+  sbatch slurm/convergence.sbatch                          # convergence = 5 tasks
 
   # Stage 2 SCALING -- a SEPARATE job, only after reviewing Stage 1. Chunk to <= 8:
   WSS_TIER=100k sbatch --array=0-7 slurm/scaling.sbatch     # then --array=8-14 once it drains

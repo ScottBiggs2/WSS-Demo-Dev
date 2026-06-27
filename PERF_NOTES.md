@@ -71,9 +71,29 @@ Tier index layout is stable: tier `t` occupies `10*t .. 10*t+9` (100k 0-9, 1m 10
 ## Funnel (screen cheap, promote winners)
 
 Stage 0 (100K): profile → pick fast retraction; `--mode parity` → **GATE 0c** trust bf16; retraction
-parity vs canonical. → Stage 1 (100K headline, 3 seeds): **GATE 1** wss > dense_matched? → Stage 2
-(100K iso-param axes): keep winning regions. → Stage 3 (1M headline): **GATE 3** wss > dense_matched
-at 100K **and** 1M? → Stage 4 (10M, 2 seeds) + lr/λ_div/retract_every/wd/dropout ablations at 100K/1M.
+parity vs canonical. → **Stage 0.5 (100K LR calibration, `lr_sweep.py`)**: sweep each method's primary
+LR group, pin each to its own best LR — see below. → Stage 1 (100K headline, 3 seeds, each method at
+its calibrated LR): **GATE 1** wss > dense_matched? → Stage 2 (100K iso-param axes): keep winning
+regions. → Stage 3 (1M headline): **GATE 3** wss > dense_matched at 100K **and** 1M? → Stage 4 (10M,
+2 seeds) + lr/λ_div/retract_every/wd/dropout ablations at 100K/1M.
+
+### Learning rate is not a shared axis (Stage 0.5, `lr_sweep.py`)
+
+The headline gate is only meaningful if **each method runs at its own best LR**. LR cannot be held
+constant across geometries: `build_optimizers` runs two optimizers with independent LRs —
+`RiemannianAdam(lr=lr_riemann)` on the Stiefel frames U/V, `Adam(lr=lr_euclid)` on every Euclidean
+param. Because W = U·S·Vᵀ is **bilinear**, the frames must rotate a finite angle per step to change the
+function, so at the dense-tuned `lr=1e-3` WSS underfits within a fixed epoch budget (it "loses"); at
+~`1e-2` it converges and wins. The need lives specifically in **`lr_riemann`** (the manifold group);
+`dense_matched` has no Stiefel params and only uses `lr_euclid`. `lr_sweep.py` sweeps each method's
+**primary group** (`lr_riemann` for `wss`/`single_rank_Jr`, `lr_euclid` for `dense*`) over a coarse
+log grid, holding the other at the baseline, and `collect_results.py` prints the argmax per method.
+Calibration is done at the **faithful** retraction (`newton_schulz`, `retract_every=1`); the lazy /
+`none` controls get their own LR recheck (their optimum shifts with inter-retraction drift), and the
+J↔r axis and 1M/10M tiers should be re-checked too (optimal `lr_riemann` shifts with r / width). Report
+the **`lr_riemann`(wss) / `lr_euclid`(dense) ratio** and the per-method LR-robustness envelope as
+first-class findings — a ~10× higher optimal `lr_riemann` is direct evidence *for* the geometric story
+(not "just a regularizer"). The shared-1e-3 default would bake in exactly this confound.
 
 ## Faithfulness ledger
 
