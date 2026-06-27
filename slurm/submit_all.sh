@@ -6,10 +6,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."          # repo root
 mkdir -p slurm/logs              # sbatch needs the log dir to exist at submit time
 
-echo "Submitting profiling array (20 configs, minutes each)..."
+echo "Submitting profiling array (see --array in profile.sbatch; minutes each)..."
 sbatch slurm/profile.sbatch
 
-echo "Submitting convergence array (short CIFAR-10 training)..."
+echo "Submitting convergence array (see --array in convergence.sbatch)..."
 sbatch slurm/convergence.sbatch
 
 echo

@@ -4,23 +4,25 @@
 # accuracy cost of the NON-FAITHFUL controls (none, retract_every>1). One single-GPU job/config.
 # Each task writes outputs/perf/convergence_cfg<idx>_cuda.csv.
 #
-# Default array (both tiers): dense baseline + dense_matched (equal-param control) +
-# single_rank_Jr-canonical + wss {canonical, newton_schulz, none}. This is the param-matched
-# accuracy comparison + the "does fast faithful retraction hurt accuracy?" check + the collapse
-# floor. Add the lazy-K accuracy cost with idx 8,9 / 18,19, or use --array=0-19 for everything.
+# Trimmed array (100k tier only -- the 1m tier trains ~1M-param ViTs and is the time/size hog):
+#   0 dense baseline | 1 dense_matched (equal-param control) | 3 single_rank_Jr-ns |
+#   6 wss-newton_schulz | 7 wss-none (collapse floor)
+# The param-matched accuracy comparison (does the gated J-structure beat an equal-param dense?)
+# + the no-retraction floor. Add 9 for lazy-K accuracy cost; add 10,11,13,16,17 for the 1m tier;
+# add idx 4 (wss-canonical) if you want the faithful-Cayley accuracy reference.
 #
 # >>> EDIT the four USER lines below for your cluster before submitting. <<<
 
 #SBATCH --job-name=wss-conv
 #SBATCH --output=slurm/logs/conv_%A_%a.out
 #SBATCH --error=slurm/logs/conv_%A_%a.err
-#SBATCH --array=0,1,2,4,6,7,10,11,12,14,16,17
+#SBATCH --array=0,1,3,6,7
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1
-#SBATCH --time=06:00:00
+#SBATCH --time=02:00:00
 #SBATCH --partition=gpu                 # the A100 partition. REQUIRED (see profile.sbatch note)
 
 set -euo pipefail

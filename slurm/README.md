@@ -5,13 +5,17 @@ retraction methods on small ViTs. The codebase was developed on M1/MPS; these ru
 
 ## What runs
 
-- **`profile.sbatch`** — `--array=0-19`, one config per task. Throughput + per-phase wall-clock
-  attribution (forward / diversity / backward / optimizer-step = the retraction) + peak memory +
-  orthonormality, via `experiments/profile_retraction.py --mode profile`. Minutes per task; the
-  6-8h is just a ceiling. `--profiler` also dumps a `torch.profiler` kernel table + chrome trace.
-- **`convergence.sbatch`** — short CIFAR-10 training per config, for the param-matched accuracy
-  comparison (dense baseline vs equal-param dense vs single_rank_Jr vs wss) and the "does fast
-  faithful retraction (`newton_schulz`) preserve accuracy?" check, plus the `none` collapse floor.
+The arrays ship **trimmed** to fit cluster job/time limits; the full 20-config grid stays in
+`build_configs()`, so widen the `--array` lists to add anything back.
+
+- **`profile.sbatch`** — trimmed `--array=0,5,6,7,9,10,16,17` (100k {dense, qr, ns, none, ns_K4} +
+  1m {dense, ns, none}). Throughput + per-phase wall-clock attribution (forward / diversity /
+  backward / optimizer-step = the retraction) + peak memory + orthonormality, via
+  `experiments/profile_retraction.py --mode profile`. Minutes per task. `--profiler` also dumps a
+  `torch.profiler` kernel table + chrome trace. (Cayley/single_rank/K2 dropped; `--array=0-19` for all.)
+- **`convergence.sbatch`** — trimmed `--array=0,1,3,6,7` (100k tier only — the 1m tier trains
+  ~1M-param ViTs and is the time/size hog). The param-matched accuracy comparison (dense baseline
+  vs equal-param dense vs single_rank_Jr vs wss-newton_schulz) + the `none` collapse floor.
 
 The config matrix (sizes × layer_type × retraction method), **with live param counts**, is:
 

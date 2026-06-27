@@ -8,13 +8,15 @@
 #SBATCH --job-name=wss-prof
 #SBATCH --output=slurm/logs/prof_%A_%a.out
 #SBATCH --error=slurm/logs/prof_%A_%a.err
-#SBATCH --array=0-19
+# Trimmed subset of the 20-config grid (full map: `--mode list`): 100k {dense,qr,ns,none,ns_K4}
+# + 1m {dense,ns,none}. Drops Cayley/single_rank/K2 (low throughput value). --array=0-19 for all.
+#SBATCH --array=0,5,6,7,9,10
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:a100:1               # one GPU per task
-#SBATCH --time=06:00:00                 # ceiling; profiling itself takes minutes
+#SBATCH --time=01:00:00                 # ceiling; profiling itself takes minutes
 #SBATCH --partition=gpu                 # the A100 partition. REQUIRED -- omitting it lands you on
                                         # the default partition (no A100) -> "node config not available"
 
