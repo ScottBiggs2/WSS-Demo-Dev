@@ -20,7 +20,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G                       # headroom for the 1m/10m tiers
-#SBATCH --gres=gpu:a100:1               # one GPU per task (A100 or H200)
+#SBATCH --gres=gpu:1                    # 100k: any free gpu (a100s saturated). 1m/10m: pin gpu:a100:1
 #SBATCH --time=08:00:00                 # 8h cap; 1m/10m real training is the time hog
 #SBATCH --partition=gpu                 # the A100 partition. REQUIRED (see profile.sbatch note)
 

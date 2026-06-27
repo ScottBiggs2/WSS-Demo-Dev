@@ -4,19 +4,21 @@
 # Each task writes outputs/perf/scaling_<tier>_cfg<idx>_cuda.csv.
 #
 # Config counts per tier (run `scaling_suite.py --mode list --tier <t>`): 100k=15, 1m=16, 10m=14.
-# Set --array to the tier's range, e.g. 100k -> --array=0-14.
+# CAP: the gpu QOS allows only 8 jobs in-system / 4 running per user, so a full tier (>8) is REJECTED
+# at submit (QOSMaxSubmitJobPerUserLimit). CHUNK it: submit --array=0-7, then --array=8-N once that
+# drains. These are multi-hour training runs; the gpu partition (8h wall) is the right home.
 #
 # >>> EDIT the four USER lines (+ WSS_TIER and --array) below for your cluster before submitting. <<<
 
 #SBATCH --job-name=wss-scale
 #SBATCH --output=slurm/logs/scale_%A_%a.out
 #SBATCH --error=slurm/logs/scale_%A_%a.err
-#SBATCH --array=0-14                      # 100k tier (15 configs). 1m -> 0-15 ; 10m -> 0-13
+#SBATCH --array=0-7                       # <= 8 (gpu QOS cap). 100k: then 8-14 ; 1m: 0-7,8-15 ; 10m: 0-7,8-13
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
-#SBATCH --gres=gpu:a100:1                 # one GPU per task (A100 or H200)
+#SBATCH --gres=gpu:1                      # 100k: any free gpu (a100s saturated). 1m/10m: pin gpu:a100:1
 #SBATCH --time=08:00:00                   # 8h cap; 10m configs may need the epoch-cap mitigation
 #SBATCH --partition=gpu                   # the A100 partition. REQUIRED (see profile.sbatch note)
 

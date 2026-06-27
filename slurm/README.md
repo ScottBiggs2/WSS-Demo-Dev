@@ -45,10 +45,12 @@ Within each tier, wss spans the retraction sweep: canonical / qr / newton_schulz
 
 ## Cluster settings (pre-filled for this cluster)
 
-All four `.sbatch` files are set up for the current cluster: `--partition=gpu`, `--gres=gpu:a100:1`,
+All four `.sbatch` files are set up for the current cluster: `--partition=gpu`, `--gres=gpu:1`,
 `--nodes=1 --ntasks-per-node=1`, `REPO=/home/biggs.s/WSS-Demo-Dev`,
-`WSS_ENV=/scratch/biggs.s/conda_envs/wss`, `WSS_CONDA_BASE=/home/biggs.s/miniconda`. `--partition`
-is **required** — omitting it lands you on the default partition (no A100) and `sbatch` fails with
+`WSS_ENV=/scratch/biggs.s/conda_envs/wss`, `WSS_CONDA_BASE=/home/biggs.s/miniconda`. The 100k jobs
+ask for a generic `--gres=gpu:1` (the a100s are usually saturated; the abundant v100s schedule
+immediately) — re-add `--gres=gpu:a100:1` for the 1m/10m tiers or for strictly comparable it/s.
+`--partition=gpu` is **required** — the default partition has no GPUs, so omitting it fails with
 *"Requested node configuration is not available."*
 
 A teammate on a different cluster edits, in ALL FOUR files:
@@ -76,13 +78,14 @@ this cluster's default 13.x, a mismatch. `PYTORCH_ENABLE_MPS_FALLBACK=1` is a no
 # one-off sanity check (interactive GPU node) -- idx 6 = 100k-wss-newton_schulz:
 python src/complex/experiments/profile_retraction.py --mode profile --config 6 --steps 50 --device cuda --amp
 
-# the funnel (gate each stage before the next):
-bash slurm/submit_all.sh          # Stage 0 (profile + parity) + Stage 1 (100k headline)
-squeue --me
-# after the headline gate passes, the iso-param scaling sweeps, per tier:
-WSS_TIER=100k sbatch slurm/scaling.sbatch                  # --array=0-14
-WSS_TIER=1m   sbatch --array=0-15 slurm/scaling.sbatch
-WSS_TIER=10m  sbatch --array=0-13 slurm/scaling.sbatch     # may need the 8h epoch-cap mitigation
+# the funnel -- ONE stage at a time, each <= 8 jobs, next only when `squeue --me` is empty:
+bash slurm/submit_all.sh          # Stage 0: profiling only (5 tasks). Prints the follow-ups.
+squeue --me                       # wait until empty, then:
+sbatch slurm/parity.sbatch && sbatch slurm/convergence.sbatch   # Stage 0c + Stage 1 (1 + 5)
+# after the headline gate passes, the iso-param scaling sweeps -- chunk each tier to <= 8:
+WSS_TIER=100k sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-14 once it drains
+WSS_TIER=1m   sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-15
+WSS_TIER=10m  sbatch --array=0-7 slurm/scaling.sbatch      # then --array=8-13 (+ 8h epoch-cap)
 ```
 
 Outputs land in `src/complex/experiments/outputs/perf/` (`profile_cfg<idx>_cuda.csv`,
@@ -105,8 +108,18 @@ speedup), the **fp32-vs-bf16 parity** trust gate (Δacc, Δortho), the param-mat
 or raising `--batch_size` (re-tune LR). bf16 is the default; if the parity gate fails, drop `--amp`
 and re-budget (fp32 ~doubles 10m wall-clock).
 
-**QOS submit limit:** if `submit_all.sh`'s second `sbatch` fails with `QOSMaxSubmitJobPerUserLimit`,
-the profiling array already fills your per-user queue quota (pending + running). A dependent job
-still occupies a slot, so submit convergence *after* profiling drains: watch `squeue --me`, then
-`sbatch slurm/convergence.sbatch`. Check your ceiling with
-`sacctmgr -n show assoc user=$USER format=QOS,MaxSubmitJobs,MaxJobs`.
+**QOS submit limit (the big gotcha):** the `gpu` QOS caps you at **8 jobs in-system (pending +
+running) and 4 running**, per user — verify with
+`sacctmgr -n show qos gpu format=MaxSubmitJobsPerUser,MaxJobsPerUser`. So a single array of > 8
+tasks, *or* several arrays totalling > 8, is rejected at submit with `QOSMaxSubmitJobPerUserLimit`
+**even when `squeue --me` is empty** (the array size itself exceeds the cap). Dependencies don't help
+— a pending dependent job still occupies a submit slot. Work within it:
+
+- Keep every submit **≤ 8 tasks**, and submit stages one at a time — wait for `squeue --me` to empty
+  before the next. `submit_all.sh` fires only the profiling array and prints the follow-up commands.
+- The trimmed `profile.sbatch` ships the **100k tier only** (5 tasks). Add 1m/10m as separate arrays
+  after it drains (`sbatch --array=10,15,16,17,19 slurm/profile.sbatch`, etc.).
+- `scaling.sbatch` tiers are 14–16 configs, so **chunk** them (`--array=0-7` then `8-N`).
+- Dropping `--gres=gpu:a100:1` → generic `--gres=gpu:1` lets jobs schedule on the idle v100s instead
+  of queueing behind the saturated a100s — it speeds *scheduling* but does **not** raise the submit
+  cap. (The 100k `.sbatch` files already use `gpu:1`.)

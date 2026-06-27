@@ -9,17 +9,22 @@
 #SBATCH --output=slurm/logs/prof_%A_%a.out
 #SBATCH --error=slurm/logs/prof_%A_%a.err
 # Trimmed subset of the 30-config grid (full map: `--mode list`): per tier {dense, wss-qr, wss-ns,
-# wss-none, wss-ns_K4}. 100k=0,5,6,7,9 ; 1m=10,15,16,17,19 ; 10m=20,25,26,27,29. Drops
-# Cayley/single_rank/K2 (low throughput value). Use --array=0-29 for the full grid.
-#SBATCH --array=0,5,6,7,9,10,15,16,17,19,20,25,26,27,29
+# wss-none, wss-ns_K4}. 100k=0,5,6,7,9 ; 1m=10,15,16,17,19 ; 10m=20,25,26,27,29.
+# CAP: the gpu QOS allows only 8 jobs in-system / 4 running per user, so a 15-task array is REJECTED
+# at submit (QOSMaxSubmitJobPerUserLimit) -- even with an empty queue. Keep each submit <= 8.
+# Default = the 100k headline tier (5 tasks). Submit 1m/10m as SEPARATE arrays after this drains:
+#   sbatch --array=10,15,16,17,19 slurm/profile.sbatch     # 1m  (re-add --gres=gpu:a100:1 for memory)
+#   sbatch --array=20,25,26,27,29 slurm/profile.sbatch     # 10m (re-add --gres=gpu:a100:1 for memory)
+#SBATCH --array=0,5,6,7,9
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G                       # 10m-tier ViTs (~12.5M params) need more headroom than 1m
-#SBATCH --gres=gpu:a100:1               # one GPU per task (A100 or H200)
+#SBATCH --gres=gpu:1                    # 100k: ANY free gpu (a100s are saturated; v100s sit idle).
+                                        # For 1m/10m or strictly comparable it/s, pin gpu:a100:1.
 #SBATCH --time=02:00:00                 # ceiling; profiling itself takes minutes even at 10m
-#SBATCH --partition=gpu                 # the A100 partition. REQUIRED -- omitting it lands you on
-                                        # the default partition (no A100) -> "node config not available"
+#SBATCH --partition=gpu                 # REQUIRED -- the default partition has no GPUs, so omitting
+                                        # this fails with "node config not available".
 
 set -euo pipefail
 
@@ -27,7 +32,6 @@ set -euo pipefail
 REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
 CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
 
-# Activate conda/mamba. Adjust the module name(s) to your site if needed.
 # Activate conda. We deliberately do NOT `module load anaconda3`: on this cluster it prepends the
 # system anaconda to PATH, which SHADOWS the activated env's python -- the job then runs a python
 # WITHOUT geoopt and dies on `import geoopt`. Source the env's OWN conda base directly instead.
