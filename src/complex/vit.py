@@ -71,7 +71,8 @@ def build_attention(cfg: ViTConfig) -> nn.Module:
                                           J=cfg.J, r=cfg.r, use_bias=cfg.use_bias, gate=cfg.gate,
                                           stiefel_canonical=cfg.stiefel_canonical,
                                           retraction_method=cfg.retraction_method,
-                                          retract_every=cfg.retract_every)
+                                          retract_every=cfg.retract_every,
+                                          attn_dropout=cfg.attn_dropout)
     if cfg.attn_type == "dense":
         # Conventional MHA: force dense projections regardless of the MLP's layer_type, so a WSS
         # MLP can be paired with standard attention (the compatibility check). Same attention math.
@@ -79,7 +80,8 @@ def build_attention(cfg: ViTConfig) -> nn.Module:
                                           J=cfg.J, r=cfg.r, use_bias=cfg.use_bias, gate=cfg.gate,
                                           stiefel_canonical=cfg.stiefel_canonical,
                                           retraction_method=cfg.retraction_method,
-                                          retract_every=cfg.retract_every)
+                                          retract_every=cfg.retract_every,
+                                          attn_dropout=cfg.attn_dropout)
     raise NotImplementedError(
         f"attn_type {cfg.attn_type!r} is a reserved seam (fused-QKV / gate-folded 'idea 1'); "
         "see the commented variants in superposition.SuperpositionMultiHeadAttn.")
@@ -101,10 +103,12 @@ class ViTBlock(nn.Module):
                              gate=cfg.gate, stiefel_canonical=cfg.stiefel_canonical,
                              retraction_method=cfg.retraction_method, retract_every=cfg.retract_every)
         self.act = nn.GELU()
+        # p=0.0 (default) => identity -> faithful no-op. Standard ViT places dropout after the activation.
+        self.mlp_drop = nn.Dropout(cfg.mlp_dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:        # (B, N, d)
         x = x + self.attn(self.norm1(x))
-        x = x + self.fc2(self.act(self.fc1(self.norm2(x))))
+        x = x + self.fc2(self.mlp_drop(self.act(self.fc1(self.norm2(x)))))
         return x
 
 

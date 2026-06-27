@@ -148,6 +148,10 @@ class ViTConfig:
     # explicitly NON-FAITHFUL stabilization for residual-stream/attention-logit hotness -- a
     # finding to report, not a silent default.
     init_scale: float = 1.0
+    # Regularization knobs for the scaling/ablation flight. Default 0.0 => nn.Dropout is an exact
+    # identity in both train and eval, so the faithful build (and every existing test) is unchanged.
+    attn_dropout: float = 0.0      # dropout on attention weights (after softmax)
+    mlp_dropout: float = 0.0       # dropout in the MLP block (after the activation)
 
     @property
     def hidden_dim(self) -> int:
@@ -173,6 +177,8 @@ class ViTConfig:
         assert self.retraction_method in RETRACTION_METHODS, (
             f"bad retraction_method {self.retraction_method!r}, expected {RETRACTION_METHODS}")
         assert self.retract_every >= 1, "retract_every must be >= 1"
+        assert 0.0 <= self.attn_dropout < 1.0, "attn_dropout must be in [0, 1)"
+        assert 0.0 <= self.mlp_dropout < 1.0, "mlp_dropout must be in [0, 1)"
         self.gate.validate()
 
 @dataclass
@@ -189,3 +195,10 @@ class TrainConfig:
     retraction: bool = True        # False -> Remark-8 control (plain SGD on raw .data, no retraction)
     stabilize: int = 50            # RiemannianAdam re-projection cadence (steps)
     log_every: int = 1             # epochs between diagnostic logs
+    # Scaling-flight knobs (perf branch). Defaults keep the faithful fp32 build byte-identical.
+    weight_decay: float = 0.0      # L2 on Euclidean params (dense W, spectrum s, bias). Passed to
+                                   # RiemannianAdam too for API symmetry, but the radial component is
+                                   # projected out of the Stiefel tangent step -> ~inert on U/V.
+    amp: bool = False              # bf16 autocast over the matmul-heavy forward+loss (CUDA only).
+                                   # Linalg (eigvalsh, retraction) stays fp32; no GradScaler for bf16.
+    allow_tf32: bool = False       # enable TF32 matmul/cudnn kernels (CUDA only); set once in fit().

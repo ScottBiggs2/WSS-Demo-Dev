@@ -24,8 +24,16 @@ def stack_frames(U: torch.Tensor) -> torch.Tensor:
 
 
 def gram(U_cols: torch.Tensor, J: int) -> torch.Tensor:
-    """(1/J) U_cols^T U_cols, shape (Jr, Jr). Trace = r for orthonormal frames."""
-    return (U_cols.transpose(-1, -2) @ U_cols) / J
+    """(1/J) U_cols^T U_cols, shape (Jr, Jr). Trace = r for orthonormal frames.
+
+    Forced fp32: this matmul feeds eigvalsh (no bf16 kernel + ill-conditioned backward at init).
+    diversity_loss() is called inside the bf16 autocast region in train_epoch, which would otherwise
+    downcast this `@`. autocast(enabled=False) re-enables fp32 and .float() guards bf16 inputs. For
+    fp32 callers (every existing test/run) .float() is a no-op -> byte-identical; harmless off-CUDA.
+    """
+    with torch.autocast(device_type="cuda", enabled=False):
+        Uc = U_cols.float()
+        return (Uc.transpose(-1, -2) @ Uc) / J
 
 
 def von_neumann(U: torch.Tensor, J: int, r: int, eps: float = 1e-12) -> tuple[torch.Tensor, torch.Tensor]:

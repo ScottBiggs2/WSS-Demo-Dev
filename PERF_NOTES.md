@@ -30,23 +30,50 @@ faithfulness**. The team suspected Python overhead + QR-retraction cost.
   on CUDA/CPU it stays on-device, removing the per-step host sync. MPS numerics unchanged.
 - **Profiling harness** `experiments/profile_retraction.py` (+ `slurm/`): per-phase wall-clock
   attribution (forward / diversity / backward / optimizer-step=retraction) via CUDA events,
-  peak memory, orthonormality drift, `torch.profiler` traces, and a short CIFAR-10 convergence mode.
+  peak memory, orthonormality drift, `torch.profiler` traces, and a short convergence mode.
 
-## Experimental grid (20 configs, `--mode list`)
+## Scaling-flight additions (CIFAR-100 study)
 
-Two size tiers, each with **two dense models** + the factorized models:
+For the 100K/1M/10M scaling + ablation flight (see the plan / the funnel below), on top of the
+retraction work:
 
-| tier | dense baseline | dense_matched (equal-param control) | single_rank_Jr / wss |
-|---|---|---|---|
-| `100k` (dim 56, depth 4, **r 4**) | ~110K | ~58K (dim 40) | ~60K |
-| `1m` (dim 128, depth 6, **r 16**, continuity) | ~811K | ~714K (dim 120) | ~715K |
+- **bf16 autocast** over the matmul-heavy forward+loss (`train.py` `train_epoch`, profile/scaling
+  via `--amp`), with **all linalg forced fp32**: the diversity Gram + `eigvalsh` re-enable fp32 at
+  `diversity.gram()`, and the optimizer step / retraction run outside autocast on fp32 master params
+  (NS also self-casts). No GradScaler (bf16). A Stage-0c `--mode parity` job certifies bf16 vs fp32.
+- **TF32** matmul/cudnn flags via `device.setup_backend(allow_tf32)` (CUDA-only no-op), `--allow_tf32`.
+- **`weight_decay`** (TrainConfig) on the Euclidean Adam; passed to RiemannianAdam too but ~inert on
+  the Stiefel frames (verified: ortho stays <1e-4 with WD on). **`attn_dropout`/`mlp_dropout`**
+  (ViTConfig), default 0.0 ⇒ `nn.Dropout` identity.
+- **`experiments/param_budget.py`** — closed-form ViT param count (== live count, tested) + a
+  `solve_dim_depth` / `dense_matched_dim` solver, so tier dims and the equal-param control are
+  derived (correctly counting CIFAR-100's `dim*100` head) rather than hand-tuned.
+- **`experiments/scaling_suite.py`** — iso-param depth↔width and J↔r sweeps (retraction fixed to the
+  Stage-0 winner). A factorized proj costs `J·r·(n+m)+J·r+b·m`, so J↔r at fixed `J·r` is exactly
+  iso-param and wss == single_rank_Jr by construction.
 
-`dense_matched` is a dense ViT shrunk to ~the factorized param count — the equal-param control that
-separates "WSS's structure helps" from "smaller models just regularize / scale differently". The
-`100k` tier uses **r=4** so WSS is genuinely ~half of dense (at r=8, `J·r=dim/2` makes WSS ≈ dense
-in params and the control is moot). `wss` spans the full retraction sweep
-(canonical / qr / newton_schulz / none + NS at `retract_every` 2,4); `single_rank_Jr` gets
-canonical + newton_schulz.
+## Experimental grid (30 configs, `--mode list`; CIFAR-100, num_classes=100)
+
+Three tiers, each with a dense baseline + a `dense_matched` equal-param control + the factorized
+models. Counts verified (`param_budget` == live ViT count); `dense_matched_dim` is **derived**:
+
+| tier | anchor (dim, depth, J·r) | dense baseline | dense_matched | single_rank_Jr / wss |
+|---|---|---|---|---|
+| `100k` (dim 72, depth 4, **J·r 24**) | 184,780 | 115,068 (dim 56) | 116,236 |
+| `1m`   (dim 192, depth 6, **J·r 48**) | 1,823,908 | 797,806 (dim 126) | 830,308 |
+| `10m`  (dim 384, depth 12, **J·r 192**) | 14,289,892 | 12,567,340 (dim 360) | 12,534,244 |
+
+`dense_matched` separates "WSS's structure helps" from "smaller models just regularize / scale
+differently" — **the headline comparator**. `wss` spans the retraction sweep (canonical / qr /
+newton_schulz / none + NS at `retract_every` 2,4); `single_rank_Jr` gets canonical + newton_schulz.
+Tier index layout is stable: tier `t` occupies `10*t .. 10*t+9` (100k 0-9, 1m 10-19, 10m 20-29).
+
+## Funnel (screen cheap, promote winners)
+
+Stage 0 (100K): profile → pick fast retraction; `--mode parity` → **GATE 0c** trust bf16; retraction
+parity vs canonical. → Stage 1 (100K headline, 3 seeds): **GATE 1** wss > dense_matched? → Stage 2
+(100K iso-param axes): keep winning regions. → Stage 3 (1M headline): **GATE 3** wss > dense_matched
+at 100K **and** 1M? → Stage 4 (10M, 2 seeds) + lr/λ_div/retract_every/wd/dropout ablations at 100K/1M.
 
 ## Faithfulness ledger
 
@@ -55,8 +82,22 @@ canonical + newton_schulz.
 | CUDA-native `eigvalsh` (device guard) | **faithful** — identical math, MPS path byte-identical |
 | `qr` retraction | **faithful** — valid Stiefel retraction (different metric), already in geoopt |
 | `newton_schulz` retraction | **faithful** — polar retraction (≈ geoopt `projx`), different trajectory than Cayley; OFF by default |
+| bf16 autocast (fwd+loss only; eigvalsh + NS retraction + optimizer step kept fp32) | **faithful-with-tolerance** — quantified by the `--mode parity` gate; default off (fp32) |
+| TF32 matmul/cudnn flags | **faithful-with-tolerance** — reduced-precision GEMM accumulation; default off, on for the suite |
+| `weight_decay` on Euclidean params (dense W, spectrum, bias) | **faithful** — standard L2 |
+| `weight_decay` on Stiefel `U`/`V` | **near-inert / labeled** — radial part projected out by `egrad2rgrad` (ortho stays <1e-4); kept for API symmetry |
+| `attn_dropout`/`mlp_dropout` (p>0) | **faithful** — standard ViT regularization; p=0 default is exact identity |
+| CIFAR-100 (own mean/std, reused 32×32 augment pipeline) | **faithful** |
 | `none` | **control** — non-faithful, geometry drifts; for ablation only |
 | `retract_every>1` | **control** — non-faithful, drift corrupts spectrum/gate/diversity invariants; reported, not shipped |
+
+### Precision policy (autocast boundary)
+
+bf16 autocast wraps **only** the forward + loss (`train_epoch`). Everything that needs fp32 is kept
+fp32: `diversity.gram()` re-enables fp32 (`torch.autocast(enabled=False)` + `.float()`) so `eigvalsh`
+sees fp32; the Newton–Schulz retraction self-casts (`Y = X.float()`); the optimizer step (and thus
+the Stiefel retraction) runs outside autocast on fp32 master params. bf16 needs no GradScaler. Eval
+runs in fp32. Any result with `init_scale != 1.0` combined with `--amp` is untested and non-headline.
 
 ## Results — local sanity (M1 CPU, tiny, NOT the headline)
 

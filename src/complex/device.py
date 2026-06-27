@@ -13,9 +13,36 @@ only takes effect if torch has not yet initialized the MPS backend).
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import torch
+
+
+def setup_backend(allow_tf32: bool = False) -> None:
+    """Set process-wide matmul precision flags ONCE (call at fit() start). CUDA-only; a no-op on
+    MPS/CPU (the attributes exist but only bite on CUDA, and we guard on is_available anyway).
+
+    TF32 uses 19-bit-mantissa tensor-core GEMM -- a large A100/H200 throughput win at a small
+    precision cost. OFF by default to keep fp32 numerics byte-faithful; the scaling suite turns it
+    on. Reduced-precision GEMM accumulation, so it is logged as faithful-with-tolerance.
+    """
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+
+
+def autocast_ctx(device: torch.device | str, enabled: bool, dtype: torch.dtype = torch.bfloat16):
+    """bf16 autocast context for the matmul-heavy forward+loss, CUDA only.
+
+    Returns a real torch.autocast only when ``enabled`` AND the device is CUDA; otherwise a
+    nullcontext (MPS/CPU have no useful bf16 autocast here, and disabled => faithful fp32). bf16
+    needs no GradScaler. Linalg that must stay fp32 (the diversity Gram + eigvalsh) re-enables fp32
+    at its own call site; the optimizer step / retraction run OUTSIDE this context on fp32 masters.
+    """
+    if enabled and torch.device(device).type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=dtype)
+    return contextlib.nullcontext()
 
 
 def enable_mps_fallback() -> None:

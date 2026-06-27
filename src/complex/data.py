@@ -22,20 +22,27 @@ _DATASETS = {
     "mnist": datasets.MNIST,
     "fmnist": datasets.FashionMNIST,   # present for parity; not exercised in Phase-2 goalpost
     "cifar10": datasets.CIFAR10,       # Phase-3 ViT task (32x32x3, 10 classes)
+    "cifar100": datasets.CIFAR100,     # scaling flight (32x32x3, 100 classes); set num_classes=100
 }
 
 _CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 _CIFAR10_STD = (0.2023, 0.1994, 0.2010)
+# CIFAR-100 has its own channel statistics -- do NOT reuse CIFAR-10's (commonly cited values).
+_CIFAR100_MEAN = (0.5071, 0.4865, 0.4409)
+_CIFAR100_STD = (0.2673, 0.2564, 0.2762)
 
 
 def _build_transform(dataset: str, train: bool, augment: bool):
     """Per-dataset, per-split transform. MNIST/FMNIST keep the original ToTensor() (unchanged).
-    CIFAR-10 always normalizes; train-time augmentation (RandomCrop pad4 + HFlip) is gated by
-    `augment`."""
+    CIFAR-10/100 always normalize (with their own stats); train-time augmentation (RandomCrop pad4 +
+    HFlip) is gated by `augment`. CIFAR-100 shares CIFAR-10's 32x32 augment pipeline -- only the
+    normalization constants differ."""
     if dataset in ("mnist", "fmnist"):
         return transforms.ToTensor()
-    if dataset == "cifar10":
-        norm = transforms.Normalize(_CIFAR10_MEAN, _CIFAR10_STD)
+    if dataset in ("cifar10", "cifar100"):
+        mean, std = ((_CIFAR100_MEAN, _CIFAR100_STD) if dataset == "cifar100"
+                     else (_CIFAR10_MEAN, _CIFAR10_STD))
+        norm = transforms.Normalize(mean, std)
         if train and augment:
             return transforms.Compose([
                 transforms.RandomCrop(32, padding=4),

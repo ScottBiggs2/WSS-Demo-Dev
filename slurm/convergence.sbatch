@@ -1,15 +1,14 @@
 #!/bin/bash
-# Short CIFAR-10 convergence runs per retraction method (perf branch).
-# Confirms qr / newton_schulz reach canonical's accuracy & orthonormality, and quantifies the
-# accuracy cost of the NON-FAITHFUL controls (none, retract_every>1). One single-GPU job/config.
+# CIFAR-100 convergence runs (perf branch). Stage 1 headline = "is WSS more than a regularizer?":
+# does the gated J-structure beat an EQUAL-PARAM dense (dense_matched)? Also the retraction-parity
+# check (qr/ns vs canonical) and the no-retraction collapse floor. One single-GPU job/config; bf16.
 # Each task writes outputs/perf/convergence_cfg<idx>_cuda.csv.
 #
-# Trimmed array (100k tier only -- the 1m tier trains ~1M-param ViTs and is the time/size hog):
-#   0 dense baseline | 1 dense_matched (equal-param control) | 3 single_rank_Jr-ns |
-#   6 wss-newton_schulz | 7 wss-none (collapse floor)
-# The param-matched accuracy comparison (does the gated J-structure beat an equal-param dense?)
-# + the no-retraction floor. Add 9 for lazy-K accuracy cost; add 10,11,13,16,17 for the 1m tier;
-# add idx 4 (wss-canonical) if you want the faithful-Cayley accuracy reference.
+# Stage-1 headline array (100k tier, the cheapest place to answer the question):
+#   0 dense (ceiling) | 1 dense_matched (THE equal-param control) | 3 single_rank_Jr-ns
+#   (fancy-LoRA control) | 6 wss-newton_schulz (the method) | 7 wss-none (collapse floor)
+# Add 4 (wss-canonical) / 5 (wss-qr) for the fast-retraction parity reference; 9 for lazy-K cost.
+# Promote to 1m by adding 10,11,13,16 (and 17) -- run with WSS_EPOCHS bumped. 10m: 20,21,23,26.
 #
 # >>> EDIT the four USER lines below for your cluster before submitting. <<<
 
@@ -20,9 +19,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --gres=gpu:a100:1
-#SBATCH --time=02:00:00
+#SBATCH --mem=48G                       # headroom for the 1m/10m tiers
+#SBATCH --gres=gpu:a100:1               # one GPU per task (A100 or H200)
+#SBATCH --time=08:00:00                 # 8h cap; 1m/10m real training is the time hog
 #SBATCH --partition=gpu                 # the A100 partition. REQUIRED (see profile.sbatch note)
 
 set -euo pipefail
@@ -30,11 +29,15 @@ set -euo pipefail
 # Repo path + conda env PREFIX on the cluster (overridable via env vars).
 REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
 CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
-EPOCHS="${WSS_EPOCHS:-10}"
+EPOCHS="${WSS_EPOCHS:-50}"
 
-module load anaconda3 2>/dev/null || module load miniconda3 2>/dev/null || true
-module load cuda 2>/dev/null || true
-source "$(conda info --base)/etc/profile.d/conda.sh"
+# Activate conda. We deliberately do NOT `module load anaconda3`: on this cluster it prepends the
+# system anaconda to PATH, which SHADOWS the activated env's python -- the job then runs a python
+# WITHOUT geoopt and dies on `import geoopt`. Source the env's OWN conda base directly instead.
+# cuda/12.1.1 matches torch's cu121 build (bare `module load cuda` pulls the default 13.x mismatch).
+module load cuda/12.1.1 2>/dev/null || module load cuda 2>/dev/null || true
+CONDA_BASE="${WSS_CONDA_BASE:-/home/biggs.s/miniconda}"
+source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 export PYTORCH_ENABLE_MPS_FALLBACK=1
@@ -45,4 +48,4 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 python src/complex/experiments/profile_retraction.py \
     --mode convergence --config "${SLURM_ARRAY_TASK_ID}" \
-    --epochs "${EPOCHS}" --batch_size 128 --device cuda
+    --epochs "${EPOCHS}" --batch_size 128 --device cuda --amp --allow_tf32

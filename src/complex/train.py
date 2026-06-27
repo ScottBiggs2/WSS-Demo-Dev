@@ -24,6 +24,7 @@ import torch.nn as nn
 from tqdm.auto import tqdm
 
 from .config import TrainConfig
+from .device import autocast_ctx, setup_backend
 from .manifold import orthonormality_error
 
 
@@ -46,14 +47,19 @@ def build_optimizers(model: nn.Module, tcfg: TrainConfig) -> list[torch.optim.Op
     opts: list[torch.optim.Optimizer] = []
     if stiefel:
         if tcfg.retraction:
-            # Need to consider if weight decay is helpful here, it probably is
-            opts.append(geoopt.optim.RiemannianAdam(stiefel, lr=tcfg.lr_riemann, stabilize=tcfg.stabilize))
+            # weight_decay on Stiefel frames is ~inert: RiemannianAdam adds the radial term
+            # (grad += wd * point) then projects via egrad2rgrad, which removes the component along
+            # the point (||proju(x, x)|| ~ 0 for orthonormal x). Passed for API symmetry; it
+            # regularizes only the Euclidean params (dense W, spectrum, bias). See PERF_NOTES.
+            opts.append(geoopt.optim.RiemannianAdam(stiefel, lr=tcfg.lr_riemann,
+                                                    stabilize=tcfg.stabilize,
+                                                    weight_decay=tcfg.weight_decay))
         else:
             # Remark-8 control: no retraction -- plain Euclidean SGD on the manifold params.
-            opts.append(torch.optim.SGD(stiefel, lr=tcfg.lr_riemann))
+            opts.append(torch.optim.SGD(stiefel, lr=tcfg.lr_riemann, weight_decay=tcfg.weight_decay))
     if euclid:
         # Note: This is not a fair comparison because the geopt Reimannian Adam loses V_t, while dense keeps it.
-        opts.append(torch.optim.Adam(euclid, lr=tcfg.lr_euclid))
+        opts.append(torch.optim.Adam(euclid, lr=tcfg.lr_euclid, weight_decay=tcfg.weight_decay))
         
         # After review, Adam is the correct comparison point.
         # We just need to be aware that euclidean adam has much stronger preconditioning than Reimannian adam
@@ -75,7 +81,7 @@ def _peak_memory(device: torch.device) -> float:
     return float("nan")
 
 
-def train_epoch(model, loader, opts, lambda_div, device, criterion, *, epoch: int | None = None, total_epochs: int | None = None, progress: bool = True) -> dict:
+def train_epoch(model, loader, opts, lambda_div, device, criterion, *, amp: bool = False, epoch: int | None = None, total_epochs: int | None = None, progress: bool = True) -> dict:
     model.train()
     total_loss = total_div = 0.0
     n_seen = 0
@@ -89,10 +95,14 @@ def train_epoch(model, loader, opts, lambda_div, device, criterion, *, epoch: in
         x, y = x.to(device), y.to(device)
         for o in opts:
             o.zero_grad()
-        logits = model(x)
-        ce = criterion(logits, y)
-        div = model.diversity_loss()
-        loss = ce + lambda_div * div
+        # bf16 autocast over the matmul-heavy forward+loss only. backward()/step() (and so the
+        # Stiefel retraction, on fp32 master params) run OUTSIDE -> fp32. diversity_loss()'s Gram +
+        # eigvalsh re-enable fp32 internally (diversity.gram). nullcontext when amp is off / not CUDA.
+        with autocast_ctx(device, amp):
+            logits = model(x)
+            ce = criterion(logits, y)
+            div = model.diversity_loss()
+            loss = ce + lambda_div * div
         loss.backward()
         for o in opts:
             o.step()
@@ -136,6 +146,7 @@ def _orthonormality(model) -> float:
 def fit(model, train_loader, test_loader, tcfg: TrainConfig, device=None, verbose=True) -> dict:
     from .device import get_device
     device = device or get_device(tcfg.device)
+    setup_backend(tcfg.allow_tf32)   # TF32 matmul/cudnn flags (CUDA-only; no-op otherwise)
     model = model.to(device)
     opts = build_optimizers(model, tcfg)
     criterion = nn.CrossEntropyLoss()
@@ -145,7 +156,7 @@ def fit(model, train_loader, test_loader, tcfg: TrainConfig, device=None, verbos
     if verbose:
         print(f"  {'epoch':>5} {'tr_loss':>8} {'test_acc':>9} {'ortho':>9} {'it/s':>7}")
     for epoch in range(1, tcfg.epochs + 1):
-        tr = train_epoch(model, train_loader, opts, tcfg.lambda_div, device, criterion)
+        tr = train_epoch(model, train_loader, opts, tcfg.lambda_div, device, criterion, amp=tcfg.amp)
         ev = evaluate(model, test_loader, device, criterion)
         ortho = _orthonormality(model)
         diag = model.diagnostics() if hasattr(model, "diagnostics") else {}

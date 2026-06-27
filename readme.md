@@ -10,8 +10,12 @@ This project uses conda for dependency management. Follow the steps below to set
 # Create conda environment
 conda create -n wss python=3.11 -y
 
+# Move to /scratch
+conda create --prefix /scratch/biggs.s/conda_envs/wss --clone /home/biggs.s/miniconda/envs/wss
+
+
 # Activate environment
-conda activate wss
+conda activate /scratch/biggs.s/conda_envs/rl_casino
 
 # Install dependencies
 pip install -r requirements.txt

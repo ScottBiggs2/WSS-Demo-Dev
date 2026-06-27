@@ -372,12 +372,14 @@ class SuperpositionMultiHeadAttn(nn.Module):
     def __init__(self, dim: int, heads: int, layer_type: str, *, J: int, r: int,
                  use_bias: bool = True, gate: GateConfig | None = None,
                  stiefel_canonical: bool = True, retraction_method: str = "auto",
-                 retract_every: int = 1, device=None, dtype=None):
+                 retract_every: int = 1, attn_dropout: float = 0.0, device=None, dtype=None):
         super().__init__()
         assert dim % heads == 0, f"dim={dim} not divisible by heads={heads}"
         self.dim, self.heads = dim, heads
         self.head_dim = dim // heads
         self.scale = self.head_dim ** -0.5
+        # p=0.0 (default) => nn.Dropout is an exact identity in train AND eval -> faithful no-op.
+        self.attn_drop = nn.Dropout(attn_dropout)
 
         def mk(i, o):
             return make_proj(layer_type, i, o, J=J, r=r, use_bias=use_bias, gate=gate,
@@ -401,6 +403,7 @@ class SuperpositionMultiHeadAttn(nn.Module):
         # tiny (~65 tokens) so there is no performance reason to fuse.
         attn = (q @ k.transpose(-2, -1)) * self.scale          # (B, h, N, N)
         attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)                             # identity when p=0 (faithful default)
         out = attn @ v                                          # (B, h, N, dh)
         out = out.transpose(1, 2).reshape(B, N, self.dim)       # (B, N, d)
         return self.o_proj(out)
