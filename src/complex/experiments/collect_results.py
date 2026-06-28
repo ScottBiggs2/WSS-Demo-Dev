@@ -112,9 +112,9 @@ def _profile_table(rows: list[dict]) -> str:
     return _md_table(header, body) + note
 
 
-def _convergence_table(rows: list[dict]) -> str:
+def _convergence_table(rows: list[dict], empty_msg: str = "no convergence CSVs found") -> str:
     if not rows:
-        return "_(no convergence CSVs found)_"
+        return f"_({empty_msg})_"
     body = []
     for r in rows:
         body.append([
@@ -248,7 +248,7 @@ def main() -> None:
         print(f"\n## Convergence — param-matched accuracy ({dev})\n")
         print(_convergence_table(conv))
         print(f"\n## Scaling sweeps — depth↔width & J↔r ({dev})\n")
-        print(_convergence_table(scaling))
+        print(_convergence_table(scaling, empty_msg="no scaling CSVs found — run scaling.sbatch"))
         print()
 
 
