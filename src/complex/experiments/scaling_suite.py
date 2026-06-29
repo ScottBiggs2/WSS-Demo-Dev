@@ -28,6 +28,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import wandb
+
 SRC = Path(__file__).resolve().parents[2]
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -134,11 +136,24 @@ def main():
     selected = configs if args.config < 0 else [configs[args.config]]
     print(f"device={device} | tier={args.tier} | {len(selected)} config(s) | epochs={args.epochs} "
           f"amp={args.amp} tf32={args.allow_tf32}")
+
+    wandb.init(
+        project="wss-perf",
+        name=f"scaling_{args.tier}_cfg{args.config if args.config >= 0 else 'all'}_{device.type}",
+        config={
+            "tier": args.tier, "config_idx": args.config, "device": str(device),
+            "batch_size": args.batch_size, "epochs": args.epochs,
+            "lr_riemann": args.lr_riemann, "lr_euclid": args.lr_euclid,
+            "amp": args.amp, "allow_tf32": args.allow_tf32,
+        }
+    )
+
     rows = [convergence_one(c, args, device) for c in selected]
 
     tag = (f"cfg{args.config}" if args.config >= 0 else "all") + f"_{device.type}"
     out = Path(args.out) if args.out else OUT_DIR / f"scaling_{args.tier}_{tag}.csv"
     _write_csv(rows, out)
+    wandb.finish()
 
 
 if __name__ == "__main__":

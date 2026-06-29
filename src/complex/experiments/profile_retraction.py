@@ -285,6 +285,23 @@ def convergence_one(cfg: dict, args, device: torch.device) -> dict:
     n_params = count_params(model)
     print(f"\n=== {cfg['label']}  ({n_params:,} params, {args.epochs} epochs, {('bf16' if args.amp else 'fp32')}) ===")
     hist = fit(model, train_loader, test_loader, tcfg, device=device)
+
+    # Log per-epoch metrics to WandB if initialized
+    if wandb.run is not None:
+        for epoch, tr_loss, val_acc, val_loss, ortho, it_s in zip(
+            hist["epoch"], hist["train_loss"], hist["test_acc"], hist["test_loss"],
+            hist["ortho_err"], hist["steps_per_sec"]
+        ):
+            wandb.log({
+                "config": cfg["label"],
+                "epoch": epoch,
+                "train_loss": tr_loss,
+                "val_acc": val_acc,
+                "val_loss": val_loss,
+                "ortho_err": ortho,
+                "iter_per_sec": it_s,
+            })
+
     return {
         "label": cfg["label"], "size": cfg["size_name"], "layer_type": cfg["layer_type"],
         "retraction_method": cfg["retraction_method"], "retract_every": cfg["retract_every"],

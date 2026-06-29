@@ -1,13 +1,14 @@
 #!/bin/bash
 # Stage-2+ iso-param SCALING sweeps (perf branch, CIFAR-100, bf16): depth<->width and J<->r.
 # One single-GPU job per scaling_suite config; the tier is chosen via WSS_TIER (100k|1m|10m).
-# Each task writes outputs/perf/scaling_<tier>_cfg<idx>_cuda.csv.
+# Each task writes outputs/perf/scaling_<tier>_cfg<idx>_cuda.csv and logs per-epoch metrics to WandB.
 #
 # Config counts per tier (run `scaling_suite.py --mode list --tier <t>`): 100k=15, 1m=16, 10m=14.
 # CAP: the gpu QOS allows only 8 jobs in-system / 4 running per user, so a full tier (>8) is REJECTED
 # at submit (QOSMaxSubmitJobPerUserLimit). CHUNK it: submit --array=0-7, then --array=8-N once that
 # drains. These are multi-hour training runs; the gpu partition (8h wall) is the right home.
 #
+# WandB: Set WANDB_API_KEY for online logging, or WANDB_MODE=offline to disable remote logging.
 # >>> EDIT the four USER lines (+ WSS_TIER and --array) below for your cluster before submitting. <<<
 
 #SBATCH --job-name=wss-scale
@@ -19,20 +20,22 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=48G
 #SBATCH --gres=gpu:v100-sxm2:1            # PINNED to one GPU model so runs are comparable (abundant -> fast). 1m/10m: gpu:a100:1
-#SBATCH --time=08:00:00                   # 8h cap; 10m configs may need the epoch-cap mitigation
+#SBATCH --time=04:00:00                   # 8h cap; 10m configs may need the epoch-cap mitigation
 #SBATCH --partition=gpu                   # the A100 partition. REQUIRED (see profile.sbatch note)
 
 set -euo pipefail
 
 REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
 CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
-EPOCHS="${WSS_EPOCHS:-60}"
+EPOCHS="${WSS_EPOCHS:-100}"
 TIER="${WSS_TIER:-100k}"
+# WandB: set WANDB_API_KEY or WANDB_MODE=offline before submitting
+WANDB_MODE="${WANDB_MODE:-online}"
 # Pin calibrated LRs from Stage 0.5 (same split: factorized -> lr_riemann, dense -> lr_euclid).
 # Scaling suite configs include both dense_matched and wss per sweep point; submitting with BOTH
 # calibrated LRs means each method gets its own optimum:
 #   WSS_LR_RIEMANN=<best> WSS_LR_EUCLID=<best> sbatch ... slurm/scaling.sbatch
-LR_RIEMANN="${WSS_LR_RIEMANN:-1e-3}"
+LR_RIEMANN="${WSS_LR_RIEMANN:-3e-2}"
 LR_EUCLID="${WSS_LR_EUCLID:-1e-3}"
 
 # Activate conda. We deliberately do NOT `module load anaconda3`: on this cluster it prepends the
@@ -45,9 +48,10 @@ source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+export WANDB_MODE="${WANDB_MODE}"
 cd "$REPO"
 
-echo "host=$(hostname)  task=${SLURM_ARRAY_TASK_ID:-NA}  tier=${TIER}  epochs=${EPOCHS}"
+echo "host=$(hostname)  task=${SLURM_ARRAY_TASK_ID:-NA}  tier=${TIER}  epochs=${EPOCHS}  wandb_mode=${WANDB_MODE}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 python src/complex/experiments/scaling_suite.py \
