@@ -28,6 +28,12 @@ REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
 CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
 EPOCHS="${WSS_EPOCHS:-60}"
 TIER="${WSS_TIER:-100k}"
+# Pin calibrated LRs from Stage 0.5 (same split: factorized -> lr_riemann, dense -> lr_euclid).
+# Scaling suite configs include both dense_matched and wss per sweep point; submitting with BOTH
+# calibrated LRs means each method gets its own optimum:
+#   WSS_LR_RIEMANN=<best> WSS_LR_EUCLID=<best> sbatch ... slurm/scaling.sbatch
+LR_RIEMANN="${WSS_LR_RIEMANN:-1e-3}"
+LR_EUCLID="${WSS_LR_EUCLID:-1e-3}"
 
 # Activate conda. We deliberately do NOT `module load anaconda3`: on this cluster it prepends the
 # system anaconda to PATH, which SHADOWS the activated env's python -- the job then runs a python
@@ -46,4 +52,5 @@ nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 python src/complex/experiments/scaling_suite.py \
     --mode convergence --tier "${TIER}" --config "${SLURM_ARRAY_TASK_ID}" \
-    --epochs "${EPOCHS}" --batch_size 128 --device cuda --amp --allow_tf32
+    --epochs "${EPOCHS}" --batch_size 128 --device cuda --amp --allow_tf32 \
+    --lr_riemann "${LR_RIEMANN}" --lr_euclid "${LR_EUCLID}"

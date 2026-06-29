@@ -4,6 +4,7 @@
 merged 5 rows -> /home/biggs.s/WSS-Demo-Dev/src/complex/experiments/outputs/perf/profile_all_cuda.csv
 merged 5 rows -> /home/biggs.s/WSS-Demo-Dev/src/complex/experiments/outputs/perf/convergence_all_cuda.csv
 merged 1 rows -> /home/biggs.s/WSS-Demo-Dev/src/complex/experiments/outputs/perf/parity_all_cuda.csv
+merged 12 rows -> /home/biggs.s/WSS-Demo-Dev/src/complex/experiments/outputs/perf/lr_sweep_all_cuda.csv
 
 ## Throughput / phase attribution (cuda)
 
@@ -16,6 +17,25 @@ merged 1 rows -> /home/biggs.s/WSS-Demo-Dev/src/complex/experiments/outputs/perf
 | 100k-wss-ns_K4 | 116,236 | 11.0 | 0.34x | 90.95 | 13.75 | 3.09 | 61.47 | 25.58 | 1.9x | 261 | 2.4e-07 |
 
 _`retr` = optimizer step = the Stiefel retraction. `retr speedup` is normalized to the slowest wss method here. `div` is the diversity/eigvalsh phase (CUDA-native on this branch). Phase sums slightly exceed ms/step (per-phase syncs)._
+
+## LR calibration — best LR per method (Stage 0.5) (cuda)
+
+| method | lr group | lr | final acc | ortho err | it/s | best |
+| --- | --- | --- | --- | --- | --- | --- |
+| dense_matched | lr_euclid | 1e-03 | 46.84% | 0.0e+00 | 15.2 | ★ |
+| dense_matched | lr_euclid | 3e-03 | 45.77% | 0.0e+00 | 13.2 |  |
+| dense_matched | lr_euclid | 1e-02 | 38.49% | 0.0e+00 | 14.8 |  |
+| dense_matched | lr_euclid | 3e-02 | 2.46% | 0.0e+00 | 14.7 |  |
+| single_rank_Jr | lr_riemann | 1e-03 | 29.06% | 1.2e-07 | 7.3 |  |
+| single_rank_Jr | lr_riemann | 3e-03 | 31.63% | 1.8e-07 | 7.3 |  |
+| single_rank_Jr | lr_riemann | 1e-02 | 34.71% | 1.8e-07 | 7.4 |  |
+| single_rank_Jr | lr_riemann | 3e-02 | 37.13% | 2.4e-07 | 6.2 | ★ |
+| wss | lr_riemann | 1e-03 | 29.75% | 2.4e-07 | 5.8 |  |
+| wss | lr_riemann | 3e-03 | 32.48% | 2.4e-07 | 6.7 |  |
+| wss | lr_riemann | 1e-02 | 36.37% | 2.4e-07 | 6.6 |  |
+| wss | lr_riemann | 3e-02 | 36.77% | 3.6e-07 | 6.8 | ★ |
+
+_Best LR per method: dense_matched: lr_euclid=1e-03 (46.84%) · single_rank_Jr: lr_riemann=3e-02 (37.13%) · wss: lr_riemann=3e-02 (36.77%). Pin each method to its own best LR for the Stage-1 headline (LR is per-geometry, not a shared axis); record the lr_riemann(wss) / lr_euclid(dense) ratio as a finding._
 
 ## fp32-vs-bf16 parity — trust gate (cuda)
 
@@ -37,4 +57,4 @@ _GATE 0c: trust bf16 if |Δacc| is small (target ≤ 1.0%) and ortho stays the s
 
 ## Scaling sweeps — depth↔width & J↔r (cuda)
 
-_(no convergence CSVs found)_
+_(no scaling CSVs found — run scaling.sbatch)_

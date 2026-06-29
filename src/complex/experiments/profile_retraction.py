@@ -34,6 +34,8 @@ import sys
 import time
 from pathlib import Path
 
+import wandb
+
 SRC = Path(__file__).resolve().parents[2]
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -379,11 +381,24 @@ def main():
     print(f"device={device} | mode={args.mode} | {len(selected)} config(s) | "
           f"steps={args.steps} warmup={args.warmup} bs={args.batch_size} amp={args.amp} tf32={args.allow_tf32}")
 
+    wandb.init(
+        project="wss-perf",
+        name=f"{args.mode}_{args.config if args.config >= 0 else 'all'}_{device.type}",
+        config={
+            "mode": args.mode, "config_idx": args.config, "device": str(device),
+            "batch_size": args.batch_size, "epochs": args.epochs,
+            "lr_riemann": args.lr_riemann, "lr_euclid": args.lr_euclid,
+            "amp": args.amp, "allow_tf32": args.allow_tf32,
+            "steps": args.steps, "warmup": args.warmup,
+        }
+    )
+
     runner = {"profile": profile_one, "convergence": convergence_one, "parity": parity_one}[args.mode]
     rows = []
     for c in selected:
         row = runner(c, args, device)
         rows.append(row)
+        wandb.log(row)
         if args.mode == "profile":
             phases = " ".join(f"{k[3:]}={v:.2f}ms" for k, v in row.items() if k.startswith("ms_"))
             print(f"  {row['label']:<28} {row['params']:>8,}p  {row['steps_per_sec']:>7.1f} it/s  "
@@ -396,6 +411,7 @@ def main():
     tag = (f"cfg{args.config}" if args.config >= 0 else "all") + f"_{device.type}"
     out = Path(args.out) if args.out else OUT_DIR / f"{args.mode}_{tag}.csv"
     _write_csv(rows, out)
+    wandb.finish()
 
 
 if __name__ == "__main__":

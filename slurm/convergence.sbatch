@@ -2,7 +2,7 @@
 # CIFAR-100 convergence runs (perf branch). Stage 1 headline = "is WSS more than a regularizer?":
 # does the gated J-structure beat an EQUAL-PARAM dense (dense_matched)? Also the retraction-parity
 # check (qr/ns vs canonical) and the no-retraction collapse floor. One single-GPU job/config; bf16.
-# Each task writes outputs/perf/convergence_cfg<idx>_cuda.csv.
+# Each task writes outputs/perf/convergence_cfg<idx>_cuda.csv and logs results to WandB.
 #
 # Stage-1 headline array (100k tier, the cheapest place to answer the question):
 #   0 dense (ceiling) | 1 dense_matched (THE equal-param control) | 3 single_rank_Jr-ns
@@ -10,6 +10,7 @@
 # Add 4 (wss-canonical) / 5 (wss-qr) for the fast-retraction parity reference; 9 for lazy-K cost.
 # Promote to 1m by adding 10,11,13,16 (and 17) -- run with WSS_EPOCHS bumped. 10m: 20,21,23,26.
 #
+# WandB: Set WANDB_API_KEY for online logging, or WANDB_MODE=offline to disable remote logging.
 # >>> EDIT the four USER lines below for your cluster before submitting. <<<
 
 #SBATCH --job-name=wss-conv
@@ -30,6 +31,14 @@ set -euo pipefail
 REPO="${WSS_REPO:-/home/biggs.s/WSS-Demo-Dev}"
 CONDA_ENV="${WSS_ENV:-/scratch/biggs.s/conda_envs/wss}"
 EPOCHS="${WSS_EPOCHS:-50}"
+# WandB: set WANDB_API_KEY or WANDB_MODE=offline before submitting
+WANDB_MODE="${WANDB_MODE:-online}"
+# Pin each method to its calibrated best LR (Stage 0.5). Dense methods use lr_euclid; factorized
+# (wss, single_rank_Jr) use lr_riemann. Submit the two groups as separate sbatch calls:
+#   WSS_LR_EUCLID=<best>   sbatch --array=0,1   slurm/convergence.sbatch  # dense + dense_matched
+#   WSS_LR_RIEMANN=<best>  sbatch --array=3,6,7 slurm/convergence.sbatch  # factorized
+LR_RIEMANN="${WSS_LR_RIEMANN:-1e-3}"
+LR_EUCLID="${WSS_LR_EUCLID:-1e-3}"
 
 # Activate conda. We deliberately do NOT `module load anaconda3`: on this cluster it prepends the
 # system anaconda to PATH, which SHADOWS the activated env's python -- the job then runs a python
@@ -41,11 +50,13 @@ source "${CONDA_BASE}/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
 export PYTORCH_ENABLE_MPS_FALLBACK=1
+export WANDB_MODE="${WANDB_MODE}"
 cd "$REPO"
 
-echo "host=$(hostname)  task=${SLURM_ARRAY_TASK_ID:-NA}  epochs=${EPOCHS}"
+echo "host=$(hostname)  task=${SLURM_ARRAY_TASK_ID:-NA}  epochs=${EPOCHS}  wandb_mode=${WANDB_MODE}"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 python src/complex/experiments/profile_retraction.py \
     --mode convergence --config "${SLURM_ARRAY_TASK_ID}" \
-    --epochs "${EPOCHS}" --batch_size 128 --device cuda --amp --allow_tf32
+    --epochs "${EPOCHS}" --batch_size 128 --device cuda --amp --allow_tf32 \
+    --lr_riemann "${LR_RIEMANN}" --lr_euclid "${LR_EUCLID}"
