@@ -69,7 +69,7 @@ RETRACTION = "newton_schulz"
 
 # Coarse log-spaced grid for the PRIMARY lr group of each method. Spans the dense-tuned 1e-3 (where
 # WSS underfits) through ~3e-2 (where the frames rotate enough to converge). Overridable: --lr_grid.
-LR_GRID = (1e-3, 3e-3, 1e-2, 3e-2)
+LR_GRID = (5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1)
 
 # Methods to calibrate (the headline trio). dense (full ceiling) can be added via --methods.
 METHODS = ("dense_matched", "single_rank_Jr", "wss")
@@ -137,14 +137,11 @@ def build_lr_configs(tier: str = "100k", lr_grid=LR_GRID, methods=METHODS,
                 lr_riemann=lr_r, lr_euclid=lr_e, **arch))
     return configs
 
-
 def _csv_floats(s: str | None) -> list[float] | None:
     return [float(x) for x in s.split(",") if x.strip()] if s else None
 
-
 def _csv_strs(s: str | None) -> list[str] | None:
     return [x.strip() for x in s.split(",") if x.strip()] if s else None
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -152,7 +149,7 @@ def main():
     ap.add_argument("--tier", choices=list(SIZES), default="100k")
     ap.add_argument("--config", type=int, default=-1, help="config index (-1 = all); see --mode list")
     ap.add_argument("--batch_size", type=int, default=128)
-    ap.add_argument("--epochs", type=int, default=30,
+    ap.add_argument("--epochs", type=int, default=25,
                     help="calibration budget; keep it a meaningful fraction of the headline schedule "
                          "(the LR ranking can shift with budget -- re-confirm finalists at full epochs)")
     ap.add_argument("--lr_grid", default=None, help="comma list overriding the swept grid (e.g. 1e-3,3e-3,1e-2)")
