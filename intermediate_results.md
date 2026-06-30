@@ -58,3 +58,11 @@ _GATE 0c: trust bf16 if |Δacc| is small (target ≤ 1.0%) and ortho stays the s
 ## Scaling sweeps — depth↔width & J↔r (cuda)
 
 _(no scaling CSVs found — run scaling.sbatch)_
+
+
+# Strong early/local result: 
+
+python -u src/complex/experiments/headline_vit.py --epochs 10 --lr_euclid 1e-2 --lr_riemann 1e-2 --dim 64 --depth 4 --J 4 --r 4 --euclidean --runs dense,single_rank_Jr,wss
+
+WSS dominates - why? 
+
