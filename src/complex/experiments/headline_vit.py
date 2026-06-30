@@ -43,6 +43,7 @@ from complex.device import get_device
 from complex.memory import measure_breakdown
 from complex.train import fit
 from complex.vit import ViT
+from complex.seed import seed_everything
 
 OUT_DIR = Path(__file__).resolve().parent / "outputs"
 _MEM_KEYS = ("mem_weight_mb", "mem_activation_mb", "mem_grad_mb", "mem_optim_mb")
@@ -101,12 +102,14 @@ def main():
     ap.add_argument("--runs", default="all",
                     help="subset of {dense,single_rank_Jr,wss,wss_div0,wss_no_retraction} or 'all'")
     ap.add_argument("--quick", action="store_true", help="2 epochs, for a fast sanity check")
+    ap.add_argument("--seed", type=int, default=0, help="lock the seed for reproducibility")
+
     args = ap.parse_args()
 
     if args.quick:
         args.epochs = 2
 
-    torch.manual_seed(0)
+    seed_everything(args.seed)
     device = get_device(args.device)
     dataset = "cifar10"
     print(f"device={device} | dataset={dataset} | dim={args.dim} depth={args.depth} heads={args.heads} "
