@@ -39,6 +39,7 @@ import torch.nn as nn
 from torchvision import datasets, transforms
 from torch.utils.data import Subset
 from torchvision.models import vit_b_16, vit_b_32, vit_l_16, vit_l_32
+from torchvision.models.vision_transformer import VisionTransformer
 
 from complex.config import GateConfig, TrainConfig
 from complex.device import get_device
@@ -172,7 +173,9 @@ class ReplacementSelfAttention(nn.Module):
 
 class TorchvisionViTWithDiagnostics(nn.Module):
     def __init__(self, model_name: str, layer_type: str, *, num_classes: int, J: int, r: int,
-                 gate_phi: str, stiefel_canonical: bool = True):
+                 gate_phi: str, stiefel_canonical: bool = True,
+                 hidden_dim: int | None = None, num_heads_override: int | None = None,
+                 mlp_dim: int | None = None):
         super().__init__()
         if model_name not in _MODEL_FACTORIES:
             raise ValueError(f"unknown model {model_name!r}; expected one of {sorted(_MODEL_FACTORIES)}")
@@ -182,7 +185,24 @@ class TorchvisionViTWithDiagnostics(nn.Module):
         self.r = r
         self.gate = GateConfig(phi=gate_phi)
         self.init_policy_log: list[dict] = []
-        self.model = _MODEL_FACTORIES[model_name](weights=None, num_classes=num_classes)
+        if hidden_dim is not None:
+            # Shrunk dense backbone (the equal-param control): keep the base model's
+            # image_size / patch_size / num_layers, but override the width so the dense
+            # param count can be matched to a factorized model. Only meaningful for dense.
+            if layer_type != "dense":
+                raise ValueError("arch overrides (hidden_dim/num_heads/mlp_dim) are only supported for layer_type='dense'")
+            base = _MODEL_FACTORIES[model_name](weights=None, num_classes=num_classes)
+            self.model = VisionTransformer(
+                image_size=int(base.image_size), patch_size=int(base.patch_size),
+                num_layers=len(base.encoder.layers),
+                num_heads=(num_heads_override if num_heads_override is not None else hidden_dim // 64),
+                hidden_dim=hidden_dim,
+                mlp_dim=(mlp_dim if mlp_dim is not None else 4 * hidden_dim),
+                num_classes=num_classes,
+            )
+            del base
+        else:
+            self.model = _MODEL_FACTORIES[model_name](weights=None, num_classes=num_classes)
         if layer_type != "dense":
             self._replace_transformer_projections(stiefel_canonical=stiefel_canonical)
 
